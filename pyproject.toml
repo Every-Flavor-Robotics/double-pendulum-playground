@@ -1,0 +1,20 @@
+[project]
+name = "double-pendulum-playground"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = "==3.12.*"
+dependencies = [
+    "dm-control>=1.0.27",
+    "gymnasium[other]>=1.0.0",
+    "imageio>=2.37.0",
+    "ipdb>=0.13.13",
+    "mujoco>=3.2.7",
+    "mushroom-rl>=1.10.1",
+    "pyyaml>=6.0.2",
+    "stable-baselines3[extra]>=2.5.0",
+    "torch>=2.6.0",
+    "torchaudio>=2.6.0",
+    "torchvision>=0.21.0",
+    "wandb>=0.19.7",
+]
