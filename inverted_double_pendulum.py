@@ -158,7 +158,25 @@ class InvertedDoublePendulumEnv(MujocoEnv, utils.EzPickle):
         self._healthy_reward = healthy_reward
         self._reset_noise_scale = reset_noise_scale
 
+        # These are the stability modes
+        # 0: both upright
+        # 1: one up one down, (current state representation won't let us distinguish between the two)
+        # 2: both down
+        self.target_mode = 0
+        self.NUM_MODES = 3
+
+        self.mode_switch_time = 800
+
         observation_space = Box(low=-np.inf, high=np.inf, shape=(9,), dtype=np.float64)
+
+        # Add one hot vector at end of observation space for current target mode
+        observation_space.shape = (observation_space.shape[0] + self.NUM_MODES,)
+        observation_space.high = np.append(
+            observation_space.high, np.ones(self.NUM_MODES)
+        )
+        observation_space.low = np.append(
+            observation_space.low, np.zeros(self.NUM_MODES)
+        )
 
         self.metadata = {
             "render_modes": [
@@ -188,8 +206,7 @@ class InvertedDoublePendulumEnv(MujocoEnv, utils.EzPickle):
 
         self.iterations = 0
 
-        self.env_switched = False
-
+        self.steps = 0
         self.dead_steps = 0
         self.dead_steps_termination = 500
 
@@ -201,6 +218,7 @@ class InvertedDoublePendulumEnv(MujocoEnv, utils.EzPickle):
 
         if y <= 1:
             self.dead_steps += 1
+        self.steps = 1
 
         terminated = self.dead_steps > self.dead_steps_termination
 
@@ -210,6 +228,11 @@ class InvertedDoublePendulumEnv(MujocoEnv, utils.EzPickle):
 
         if self.render_mode == "human":
             self.render()
+
+        if self.iterations % self.mode_switch_time == 0:
+            # Sample new mode
+            self.target_mode = self.np_random.randint(self.NUM_MODES)
+
         # truncation=False as the time limit is handled by the `TimeLimit` wrapper added during `make`
         return observation, reward, terminated, False, info
 
@@ -222,8 +245,16 @@ class InvertedDoublePendulumEnv(MujocoEnv, utils.EzPickle):
         vel_penalty = 1e-3 * v1**2 + 5e-3 * v2**2
         alive_bonus = self._healthy_reward * int(not terminated)
 
+        target_tip_y = None
+        if self.target_mode == 0:
+            target_tip_y = 2
+        elif self.target_mode == 1:
+            target_tip_y = 0
+        elif self.target_mode == 2:
+            target_tip_y = -2
+
         # Distance from the tip of the second pole to the pendulum standing up position
-        dist_penalty = 0.01 * x**2 + (y - 2) ** 2
+        dist_penalty = 0.01 * x**2 + (y - target_tip_y) ** 2
 
         reward = alive_bonus - dist_penalty - vel_penalty
 
@@ -244,6 +275,8 @@ class InvertedDoublePendulumEnv(MujocoEnv, utils.EzPickle):
                 np.cos(self.data.qpos[1:]),
                 np.clip(self.data.qvel, -10, 10),
                 np.clip(self.data.qfrc_constraint, -10, 10)[:1],
+                # One hot vector for current mode
+                np.eye(self.NUM_MODES)[self.target_mode],
             ]
         ).ravel()
 
@@ -254,6 +287,9 @@ class InvertedDoublePendulumEnv(MujocoEnv, utils.EzPickle):
         self.iterations += 1
 
         self.dead_steps = 0
+
+        # Sample a random mode
+        self.target_mode = self.np_random.randint(self.NUM_MODES)
 
         # Sample dimensions [1,2] from -np.pi to np.pi
         # dimension 0 should use reset_noise_scale

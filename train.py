@@ -14,7 +14,7 @@ from wandb.integration.sb3 import WandbCallback
 register(
     id="CustomDoublePendulum-v0",
     entry_point="inverted_double_pendulum:InvertedDoublePendulumEnv",
-    max_episode_steps=800,
+    max_episode_steps=1600,
 )
 
 # env = gym.make("CustomDoublePendulum-v0")
@@ -54,7 +54,7 @@ def main():
         net_arch=[dict(pi=[256, 256, 256, 256], vf=[256, 256, 256, 256])],
     )
 
-    timesteps = 200_000_000
+    timesteps = 300_000_000
 
     model = PPO(
         "MlpPolicy",
