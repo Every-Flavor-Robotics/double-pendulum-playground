@@ -170,12 +170,12 @@ class InvertedDoublePendulumEnv(MujocoEnv, utils.EzPickle):
         observation_space = Box(low=-np.inf, high=np.inf, shape=(9,), dtype=np.float64)
 
         # Add one hot vector at end of observation space for current target mode
-        observation_space.shape = (observation_space.shape[0] + self.NUM_MODES,)
-        observation_space.high = np.append(
-            observation_space.high, np.ones(self.NUM_MODES)
-        )
-        observation_space.low = np.append(
-            observation_space.low, np.zeros(self.NUM_MODES)
+        new_shape = (observation_space.shape[0] + self.NUM_MODES,)
+        new_high = np.append(observation_space.high, np.ones(self.NUM_MODES))
+        new_low = np.append(observation_space.low, np.zeros(self.NUM_MODES))
+
+        observation_space = Box(
+            low=new_low, high=new_high, shape=new_shape, dtype=np.float64
         )
 
         self.metadata = {
@@ -216,7 +216,11 @@ class InvertedDoublePendulumEnv(MujocoEnv, utils.EzPickle):
         x, _, y = self.data.site_xpos[0]
         observation = self._get_obs()
 
-        if y <= 1:
+        if self.target_mode == 0 and y <= 1:
+            self.dead_steps += 1
+        elif self.target_mode == 1 and (y <= -1 or y >= 1):
+            self.dead_steps += 1
+        elif self.target_mode == 2 and y >= 1:
             self.dead_steps += 1
         self.steps = 1
 
@@ -267,7 +271,8 @@ class InvertedDoublePendulumEnv(MujocoEnv, utils.EzPickle):
         return reward, reward_info
 
     def _get_obs(self):
-        # qpos: cart x pos, link 0, link 1
+
+        # qpos: cart x pos, link 0, link 1, target mode
         return np.concatenate(
             [
                 self.data.qpos[:1],  # cart x pos
@@ -275,7 +280,6 @@ class InvertedDoublePendulumEnv(MujocoEnv, utils.EzPickle):
                 np.cos(self.data.qpos[1:]),
                 np.clip(self.data.qvel, -10, 10),
                 np.clip(self.data.qfrc_constraint, -10, 10)[:1],
-                # One hot vector for current mode
                 np.eye(self.NUM_MODES)[self.target_mode],
             ]
         ).ravel()
@@ -289,7 +293,7 @@ class InvertedDoublePendulumEnv(MujocoEnv, utils.EzPickle):
         self.dead_steps = 0
 
         # Sample a random mode
-        self.target_mode = self.np_random.randint(self.NUM_MODES)
+        self.target_mode = self.np_random.integers(0, self.NUM_MODES)
 
         # Sample dimensions [1,2] from -np.pi to np.pi
         # dimension 0 should use reset_noise_scale
