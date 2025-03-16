@@ -1,5 +1,7 @@
 # This script is just to run through the motions of training an agent for the air hockey challenge
 
+import math
+
 import gymnasium
 from gymnasium.envs.registration import register
 from stable_baselines3 import PPO
@@ -7,14 +9,14 @@ from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.policies import ActorCriticPolicy
 from stable_baselines3.common.vec_env import SubprocVecEnv, VecVideoRecorder
+from wandb.integration.sb3 import WandbCallback
 
 import wandb
-from wandb.integration.sb3 import WandbCallback
 
 register(
     id="CustomDoublePendulum-v0",
     entry_point="inverted_double_pendulum:InvertedDoublePendulumEnv",
-    max_episode_steps=1600,
+    max_episode_steps=2000,
 )
 
 # env = gym.make("CustomDoublePendulum-v0")
@@ -51,10 +53,21 @@ def main():
     )
 
     policy_kwargs = dict(
-        net_arch=[dict(pi=[256, 256, 256, 256], vf=[256, 256, 256, 256])],
+        net_arch=[dict(pi=[256, 256, 256, 256, 256], vf=[256, 256, 256, 256, 256])],
     )
 
-    timesteps = 300_000_000
+    timesteps = 600_000_000
+
+    def lr_decay(x):
+        # Decay to 70% of training steps
+        # X is the fraction of training steps remaining
+
+        # Scale x such that 0.3 to 1 is 0 to 1
+        x = (x - 0.3) / 0.7
+
+        x = max(0, x)
+
+        return math.exp(x * math.log(3e-4) + (1 - x) * math.log(8e-5))
 
     model = PPO(
         "MlpPolicy",
@@ -63,15 +76,15 @@ def main():
         device="cuda:0",
         ent_coef=0.0006,
         tensorboard_log=f"runs/{run.id}",
-        batch_size=int(n_envs * 800 / 2),
+        batch_size=int(n_envs * 2000 / 2),
         n_epochs=20,
         max_grad_norm=0.25,
         policy_kwargs=policy_kwargs,
         # decay learning rate to 1e-6 by the end of training
-        learning_rate=lambda x: 3e-4 * (x) + 1e-6 * (1 - x),
+        learning_rate=lr_decay,
     )
     model.learn(
-        total_timesteps=200_000_000,
+        total_timesteps=timesteps,
         callback=[
             WandbCallback(
                 gradient_save_freq=100,
