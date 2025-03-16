@@ -145,7 +145,7 @@ class InvertedDoublePendulumEnv(MujocoEnv, utils.EzPickle):
 
     def __init__(
         self,
-        xml_file: str = "inverted_double_pendulum.xml",
+        xml_file: str = "./new_pendulum.xml",
         frame_skip: int = 5,
         default_camera_config: Dict[str, Union[float, int]] = {},
         healthy_reward: float = 10.0,
@@ -163,9 +163,9 @@ class InvertedDoublePendulumEnv(MujocoEnv, utils.EzPickle):
         # 1: one up one down, (current state representation won't let us distinguish between the two)
         # 2: both down
         self.target_mode = 0
-        self.NUM_MODES = 3
+        self.NUM_MODES = 4
 
-        self.mode_switch_time = 800
+        self.mode_switch_time = 1000
 
         observation_space = Box(low=-np.inf, high=np.inf, shape=(9,), dtype=np.float64)
 
@@ -213,34 +213,40 @@ class InvertedDoublePendulumEnv(MujocoEnv, utils.EzPickle):
     def step(self, action):
         self.do_simulation(action, self.frame_skip)
 
-        x, _, y = self.data.site_xpos[0]
+        pole1_x, _, pole1_y = self.data.site_xpos[0]
+        pole2_x, _, pole2_y = self.data.site_xpos[1]
         observation = self._get_obs()
 
-        if self.target_mode == 0 and y <= 1:
+        if self.target_mode == 0 and pole2_y <= 1:
             self.dead_steps += 1
-        elif self.target_mode == 1 and (y <= -1 or y >= 1):
+        elif (self.target_mode == 1 or self.target_mode == 2) and (
+            pole2_y <= -0.15 or pole2_y >= 0.15
+        ):
             self.dead_steps += 1
-        elif self.target_mode == 2 and y >= 1:
+        elif self.target_mode == 2 and pole2_y >= -1:
             self.dead_steps += 1
-        self.steps = 1
+        self.steps += 1
 
         terminated = self.dead_steps > self.dead_steps_termination
 
-        reward, reward_info = self._get_rew(x, y, terminated)
+        reward, reward_info = self._get_rew(
+            pole1_x, pole1_y, pole2_x, pole2_y, terminated
+        )
 
         info = reward_info
 
         if self.render_mode == "human":
             self.render()
 
-        if self.iterations % self.mode_switch_time == 0:
+        if self.steps % self.mode_switch_time == 0:
             # Sample new mode
-            self.target_mode = self.np_random.randint(self.NUM_MODES)
+            self.target_mode = self.np_random.integers(0, self.NUM_MODES)
+            # self.dead_steps = 0
 
         # truncation=False as the time limit is handled by the `TimeLimit` wrapper added during `make`
         return observation, reward, terminated, False, info
 
-    def _get_rew(self, x, y, terminated):
+    def _get_rew(self, pole1_x, pole1_y, pole2_x, pole2_y, terminated):
 
         # Pendulum standing up: [0, 1.12]
 
@@ -249,18 +255,25 @@ class InvertedDoublePendulumEnv(MujocoEnv, utils.EzPickle):
         vel_penalty = 1e-3 * v1**2 + 5e-3 * v2**2
         alive_bonus = self._healthy_reward * int(not terminated)
 
+        pole1_distance_penalty = 0
         target_tip_y = None
         if self.target_mode == 0:
             target_tip_y = 2
         elif self.target_mode == 1:
-            target_tip_y = 0
+            target_tip_y = 0.4
+            # Encourage pole 1 to be negative
+            pole1_distance_penalty = 0.01 * pole1_x**2 + (pole1_y + 1.0) ** 2
         elif self.target_mode == 2:
+            target_tip_y = -0.4
+            # Encourage pole 1 to be positive
+            pole1_distance_penalty = 0.01 * pole1_x**2 + (pole1_y - 1.0) ** 2
+        elif self.target_mode == 3:
             target_tip_y = -2
 
         # Distance from the tip of the second pole to the pendulum standing up position
-        dist_penalty = 0.01 * x**2 + (y - target_tip_y) ** 2
+        dist_penalty = 0.01 * pole2_x**2 + (pole2_y - target_tip_y) ** 2
 
-        reward = alive_bonus - dist_penalty - vel_penalty
+        reward = alive_bonus - dist_penalty - vel_penalty - pole1_distance_penalty
 
         reward_info = {
             # "reward_survive": alive_bonus,
@@ -285,12 +298,14 @@ class InvertedDoublePendulumEnv(MujocoEnv, utils.EzPickle):
         ).ravel()
 
     def reset_model(self):
+
         noise_low = -self._reset_noise_scale
         noise_high = self._reset_noise_scale
 
         self.iterations += 1
 
         self.dead_steps = 0
+        self.steps = 0
 
         # Sample a random mode
         self.target_mode = self.np_random.integers(0, self.NUM_MODES)
