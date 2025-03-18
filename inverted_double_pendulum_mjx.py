@@ -2,6 +2,7 @@ __credits__ = ["Kallinteris-Andreas"]
 
 from typing import Dict, Union
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 from gymnasium import utils
@@ -182,7 +183,7 @@ class InvertedDoublePendulumEnv(MJXEnv, utils.EzPickle):
         # 0: both upright
         # 1: one up one down, (current state representation won't let us distinguish between the two)
         # 2: both down
-        self.target_mode = 0
+        self.target_modes = None
         self.NUM_MODES = 4
         self.balance_mode = balance_mode
 
@@ -219,8 +220,8 @@ class InvertedDoublePendulumEnv(MJXEnv, utils.EzPickle):
         )
 
         # Start both joints at 180 degrees (pi radians)
-        self.init_qpos[1] = np.pi
-        self.init_qpos[2] = np.pi
+        self.init_qpos.at[1].set(np.pi)
+        self.init_qpos.at[2].set(np.pi)
 
         self.metadata = {
             "render_modes": ["human", "rgb_array", "depth_array"],
@@ -236,28 +237,43 @@ class InvertedDoublePendulumEnv(MJXEnv, utils.EzPickle):
         self.switch_order = switch_order
         self.switch_index = None if switch_order is None else -1
 
+        self.rng_key = jax.random.key(np.random.randint(0, 2**32))
+
     def step(self, action):
+
         # Convert to jax array
         action = jnp.asarray(action)
 
         self.do_simulation(action, self.frame_skip)
 
-        pole1_x, _, pole1_y = self.data.site_xpos[0]
-        pole2_x, _, pole2_y = self.data.site_xpos[1]
+        # Unpack the pole positions
+        pole1_x, _, pole1_y = self.mjx_data.site_xpos[:, 0].T
+        pole2_x, _, pole2_y = self.mjx_data.site_xpos[:, 1].T
+
         observation = self._get_obs()
 
-        if self.target_mode == 0 and pole2_y <= 1:
-            self.dead_steps += 1
-        elif (self.target_mode == 1 or self.target_mode == 2) and (
-            pole2_y <= -0.15 or pole2_y >= 0.15
-        ):
-            self.dead_steps += 1
-        elif self.target_mode == 3 and pole2_y >= -1:
-            self.dead_steps += 1
+        # Condition for target_mode == 0: if pole2_y <= 1
+        mask0 = (self.target_modes == 0) & (pole2_y <= 1)
+
+        # Condition for target_mode in {1, 2}: if pole2_y <= -0.15 or pole2_y >= 0.15
+        mask1 = ((self.target_modes == 1) | (self.target_modes == 2)) & (
+            (pole2_y <= -0.15) | (pole2_y >= 0.15)
+        )
+
+        # Condition for target_mode == 3: if pole2_y >= -1
+        mask2 = (self.target_modes == 3) & (pole2_y >= -1)
+
+        # Create an increment array: each element gets a 1 if any condition is met
+        increment = (
+            mask0.astype(jnp.int32) + mask1.astype(jnp.int32) + mask2.astype(jnp.int32)
+        )
+
+        self.dead_steps += increment
+
         self.steps += 1
 
-        terminated = (
-            self.dead_steps > self.dead_steps_termination and self.terminate_on_dead
+        terminated = jnp.logical_and(
+            self.dead_steps > self.dead_steps_termination, self.terminate_on_dead
         )
 
         reward, reward_info = self._get_rew(
@@ -279,35 +295,43 @@ class InvertedDoublePendulumEnv(MJXEnv, utils.EzPickle):
 
     def _get_rew(self, pole1_x, pole1_y, pole2_x, pole2_y, terminated):
 
-        # Pendulum standing up: [0, 1.12]
-
-        v1, v2 = self.data.qvel[1:3]
-        # dist_penalty = 0.01 * x**2 + (y - 2) ** 2
+        # Assuming self.data.qvel is now a batched array with shape (n_envs, nv)
+        qvel = self.mjx_data.qvel
+        # Extract the relevant velocity components for each environment
+        v1 = qvel[:, 1]
+        v2 = qvel[:, 2]
         vel_penalty = 1e-3 * v1**2 + 5e-3 * v2**2
-        alive_bonus = self._healthy_reward * int(not terminated)
 
-        pole1_distance_penalty = 0
-        target_tip_y = None
-        if self.target_mode == 0:
-            target_tip_y = 2
-        elif self.target_mode == 1:
-            target_tip_y = 0.6
-            # Encourage pole 1 to be negative
-            pole1_distance_penalty = 0.01 * pole1_x**2 + (pole1_y + 1.2) ** 2
-        elif self.target_mode == 2:
-            target_tip_y = -0.6
-            # Encourage pole 1 to be positive
-            pole1_distance_penalty = 0.01 * pole1_x**2 + (pole1_y - 1.2) ** 2
-        elif self.target_mode == 3:
-            target_tip_y = -2
+        # Compute alive bonus: terminated is a boolean array, so 1 if not terminated, else 0.
+        # (We subtract the boolean converted to int.)
+        alive_bonus = self._healthy_reward * (1 - terminated.astype(jnp.int32))
 
-        # Distance from the tip of the second pole to the pendulum standing up position
+        # Determine the target tip y-coordinate based on target_mode
+        # For modes not explicitly handled, we default to 0.0 (or raise an error if that makes more sense)
+        conditions = [
+            self.target_modes == 0,
+            self.target_modes == 1,
+            self.target_modes == 2,
+            self.target_modes == 3,
+        ]
+        choices = [2.0, 0.6, -0.6, -2.0]
+        target_tip_y = jnp.select(conditions, choices, default=0.0)
+
+        # For modes 1 and 2, we add a pole1 distance penalty; otherwise it's 0.
+        conditions = [self.target_modes == 1, self.target_modes == 2]
+        choices = [
+            0.01 * pole1_x**2 + (pole1_y + 1.2) ** 2,  # Penalty when target_mode == 1
+            0.01 * pole1_x**2 + (pole1_y - 1.2) ** 2,  # Penalty when target_mode == 2
+        ]
+        pole1_distance_penalty = jnp.select(conditions, choices, default=0.0)
+
+        # Distance penalty for the tip of the second pole
         dist_penalty = 0.01 * pole2_x**2 + (pole2_y - target_tip_y) ** 2
 
+        # Compute the overall reward
         reward = alive_bonus - dist_penalty - vel_penalty - pole1_distance_penalty
 
         reward_info = {
-            # "reward_survive": alive_bonus,
             "distance_penalty": -dist_penalty,
             "velocity_penalty": -vel_penalty,
         }
@@ -317,25 +341,28 @@ class InvertedDoublePendulumEnv(MJXEnv, utils.EzPickle):
     def _get_obs(self):
 
         # qpos: cart x pos, link 0, link 1, target mode
-        return np.concatenate(
+        return jnp.concatenate(
             [
-                self.data.qpos[:1],  # cart x pos
-                np.sin(self.data.qpos[1:]),  # link angles
-                np.cos(self.data.qpos[1:]),
-                np.clip(self.data.qvel, -10, 10),
-                np.clip(self.data.qfrc_constraint, -10, 10)[:1],
-                np.eye(self.NUM_MODES)[self.target_mode],
-            ]
-        ).ravel()
+                self.mjx_data.qpos[:, :1],
+                jnp.sin(self.mjx_data.qpos[:, 1:]),
+                jnp.cos(self.mjx_data.qpos[:, 1:]),
+                jnp.clip(self.mjx_data.qvel, -10, 10),
+                jnp.clip(self.mjx_data.qfrc_constraint, -10, 10)[:, :1],
+                self.target_modes[:, None],
+            ],
+            axis=-1,
+        )
 
     def _get_next_mode(self):
         if self.switch_order is None:
-            return self.np_random.integers(0, self.NUM_MODES)
+            return jax.random.randint(self.rng_key, (self.n_envs,), 0, self.NUM_MODES)
         else:
             self.switch_index += 1
             if self.switch_index >= len(self.switch_order):
                 self.switch_index = 0
-            return self.switch_order[self.switch_index]
+
+            # Create array
+            return jnp.array([self.switch_order[self.switch_index]] * self.n_envs)
 
     def reset_model(self):
 
@@ -344,27 +371,61 @@ class InvertedDoublePendulumEnv(MJXEnv, utils.EzPickle):
 
         self.iterations += 1
 
-        self.dead_steps = 0
+        self.dead_steps = jnp.zeros(self.n_envs)
         self.steps = 0
 
         # Sample a random mode
         if self.balance_mode is not None:
-            self.target_mode = self.balance_mode
+            # Sample n_envs target modes
+            # self.target_modes = self.np_random.integers(0, self.NUM_MODES, self.n_envs)
+            # jax
+            self.target_modes = jax.random.randint(
+                self.rng_key, (self.n_envs,), 0, self.NUM_MODES
+            )
         else:
             # Sample a random initial mode
-            self.target_mode = self._get_next_mode()
+            self.target_modes = self._get_next_mode()
 
         # Sample dimensions [1,2] from -np.pi to np.pi
         # dimension 0 should use reset_noise_scale
 
-        init_qpos = self.init_qpos.copy()
-        init_qpos[1:3] = self.np_random.uniform(low=-np.pi, high=np.pi, size=2)
+        rng_keys = jax.random.split(self.rng_key, self.n_envs)
 
-        init_qpos[0] += self.np_random.uniform(low=noise_low, high=noise_high)
+        def sample_all(key):
+            key1, key2 = jax.random.split(key)
+            angles = jax.random.uniform(key1, shape=(2,), minval=0, maxval=2 * jnp.pi)
+            noise = jax.random.uniform(
+                key2, shape=(), minval=noise_low, maxval=noise_high
+            )
+            return angles, noise
 
-        self.set_state(
-            init_qpos,
-            self.init_qvel
-            + self.np_random.standard_normal(self.model.nv) * self._slider_reset_noise,
+        angles_init, slider_init = jax.vmap(sample_all)(
+            rng_keys
+        )  # shapes: (n_envs, 2) and (n_envs,)
+
+        init_qpos = jnp.concatenate(
+            [
+                slider_init[:, None],
+                angles_init,
+            ],
+            axis=-1,
         )
+
+        # Generate a (n_envs, model.nv) array of noise
+        init_qvel = (
+            jax.random.normal(self.rng_key, shape=(self.n_envs, self.model.nv))
+            * self._slider_reset_noise
+        )
+
+        # Sample init_qvel
+
+        # self.set_state(
+        #     init_qpos,
+        #     init_qvel,
+        # )
+
+        # breakpoint()
+        reset_fn = jax.jit(jax.vmap(self.set_state, in_axes=(0, 0)))
+        self.mjx_data = reset_fn(init_qpos, init_qvel)
+
         return self._get_obs()

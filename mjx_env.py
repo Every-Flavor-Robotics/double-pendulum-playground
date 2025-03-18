@@ -85,8 +85,8 @@ class MJXEnv(gym.Env):
             self._initialize_simulation()
         )
 
-        self.init_qpos = self.data.qpos.ravel().copy()
-        self.init_qvel = self.data.qvel.ravel().copy()
+        self.init_qpos = self.mjx_data.qpos.ravel().copy()
+        self.init_qvel = self.mjx_data.qvel.ravel().copy()
 
         self.frame_skip = frame_skip
 
@@ -152,18 +152,24 @@ class MJXEnv(gym.Env):
 
         Note: `qpos` and `qvel` is not the full physics state for all mujoco models/environments https://mujoco.readthedocs.io/en/stable/APIreference/APItypes.html#mjtstate
         """
+
         assert qpos.shape == (self.model.nq,) and qvel.shape == (self.model.nv,)
-        self.data.qpos[:] = np.copy(qpos)
-        self.data.qvel[:] = np.copy(qvel)
-        if self.model.na == 0:
-            self.data.act[:] = None
-        mujoco.mj_forward(self.model, self.data)
+
+        data = mjx.make_data(self.mjx_model)
+
+        data = data.replace(qpos=qpos, qvel=qvel)
+
+        # if self.model.na == 0:
+        #     data = data.replace(act=None)
+        mjx.forward(self.mjx_model, data)
+
+        return data
 
     def compile_step(self):
         """Compile the simulation step function."""
 
         def _step(x, ctrl_in):
-            x.replace(ctrl=ctrl_in)
+            x = x.replace(ctrl=ctrl_in)
 
             jax.lax.fori_loop(
                 0,
@@ -188,12 +194,12 @@ class MJXEnv(gym.Env):
         """
 
         # Batched mjx data
-        batched_mjx_data = jax.tree_map(
-            lambda x: jnp.broadcast_to(x, (self.n_envs,) + x.shape), self.mjx_data
-        )
+        # batched_mjx_data = jax.tree_map(
+        #     lambda x: jnp.broadcast_to(x, (self.n_envs,) + x.shape), self.mjx_data
+        # )
 
         # Print batched mjx data
-        self.compiled_step(batched_mjx_data, ctrl)
+        self.mjx_data = self.compiled_step(self.mjx_data, ctrl)
 
     def render(self):
         """
