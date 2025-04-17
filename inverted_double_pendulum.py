@@ -151,7 +151,8 @@ class InvertedDoublePendulumEnv(MujocoEnv, utils.EzPickle):
         self,
         xml_file: str = "./new_pendulum.xml",
         frame_skip: int = 5,
-        default_camera_config: Dict[str, Union[float, int]] = {},
+        camera_config: Dict[str, Union[float, int]] = {},
+        render_resolution: tuple = (640, 480),
         healthy_reward: float = 10.0,
         slider_reset_noise: float = 0.05,
         balance_mode: int = None,  # The balance mode to train with
@@ -208,15 +209,32 @@ class InvertedDoublePendulumEnv(MujocoEnv, utils.EzPickle):
             ],
         }
 
+        # Confirm render resolution shape
+        if len(render_resolution) != 2:
+            raise ValueError(
+                f"Render resolution must be a tuple of two integers, got {render_resolution}"
+            )
+        if not all(isinstance(i, int) for i in render_resolution):
+            raise ValueError(
+                f"Render resolution must be a tuple of two integers, got {render_resolution}"
+            )
+        if render_resolution[0] <= 0 or render_resolution[1] <= 0:
+            raise ValueError(
+                f"Render resolution must be positive integers, got {render_resolution}"
+            )
+
+        if camera_config is None:
+            camera_config = DEFAULT_CAMERA_CONFIG
+
         MujocoEnv.__init__(
             self,
             xml_file,
             frame_skip,
             observation_space=observation_space,
-            default_camera_config=DEFAULT_CAMERA_CONFIG,
+            default_camera_config=camera_config,
             render_mode="rgb_array",
-            width=3840,
-            height=2160,
+            width=render_resolution[0],
+            height=render_resolution[1],
             **kwargs,
         )
 
