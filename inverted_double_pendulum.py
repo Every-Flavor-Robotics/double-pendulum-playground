@@ -9,8 +9,12 @@ from gymnasium.spaces import Box
 
 DEFAULT_CAMERA_CONFIG = {
     "trackbodyid": 0,
-    "distance": 4.1225,
-    "lookat": np.array((0.0, 0.0, 0.12250000000000005)),
+    "distance": 5.0,
+    # Move the lookat a bit if you'd like the camera to center higher/lower
+    "lookat": np.array([0.0, 0.0, 0.2]),
+    # Add these two to get a 3D angle
+    "azimuth": 0.0,
+    "elevation": -20,
 }
 
 
@@ -149,14 +153,30 @@ class InvertedDoublePendulumEnv(MujocoEnv, utils.EzPickle):
         frame_skip: int = 5,
         default_camera_config: Dict[str, Union[float, int]] = {},
         healthy_reward: float = 10.0,
-        reset_noise_scale: float = 0.05,
+        slider_reset_noise: float = 0.05,
+        balance_mode: int = None,  # The balance mode to train with
+        mode_switch_steps: int = 1000,  # Number of steps before switching modes
+        terminate_on_dead: bool = True,  # Terminate the episode if the pendulum is dead
+        switch_order: list = None,
         **kwargs,
     ):
+        """_summary_
 
-        utils.EzPickle.__init__(self, xml_file, frame_skip, reset_noise_scale, **kwargs)
+        Args:
+            xml_file (str, optional): Mujoco XML file. Defaults to "./new_pendulum.xml".
+            frame_skip (int, optional): Number of frames to skip. Defaults to 5.
+            default_camera_config (Dict[str, Union[float, int]], optional): _description_. Defaults to {}.
+            slider_reset_noise (float, optional): Reset noise for the slider. Defaults to 0.05.
+            balance_mode (int, optional): Balance mode to train with. If None, robot will be trained to switch between modes. Defaults to None.
+            mode_switch_steps (int, optional): Number of steps before switching modes, if balance_mode is None. Defaults to 1000.
+        """
+
+        utils.EzPickle.__init__(
+            self, xml_file, frame_skip, slider_reset_noise, **kwargs
+        )
 
         self._healthy_reward = healthy_reward
-        self._reset_noise_scale = reset_noise_scale
+        self._slider_reset_noise = slider_reset_noise
 
         # These are the stability modes
         # 0: both upright
@@ -164,8 +184,10 @@ class InvertedDoublePendulumEnv(MujocoEnv, utils.EzPickle):
         # 2: both down
         self.target_mode = 0
         self.NUM_MODES = 4
+        self.balance_mode = balance_mode
 
-        self.mode_switch_time = 1000
+        self.mode_switch_steps = mode_switch_steps
+        self.terminate_on_dead = terminate_on_dead
 
         observation_space = Box(low=-np.inf, high=np.inf, shape=(9,), dtype=np.float64)
 
@@ -191,7 +213,10 @@ class InvertedDoublePendulumEnv(MujocoEnv, utils.EzPickle):
             xml_file,
             frame_skip,
             observation_space=observation_space,
-            default_camera_config=default_camera_config,
+            default_camera_config=DEFAULT_CAMERA_CONFIG,
+            render_mode="rgb_array",
+            width=3840,
+            height=2160,
             **kwargs,
         )
 
@@ -210,6 +235,9 @@ class InvertedDoublePendulumEnv(MujocoEnv, utils.EzPickle):
         self.dead_steps = 0
         self.dead_steps_termination = 500
 
+        self.switch_order = switch_order
+        self.switch_index = None if switch_order is None else -1
+
     def step(self, action):
         self.do_simulation(action, self.frame_skip)
 
@@ -223,11 +251,13 @@ class InvertedDoublePendulumEnv(MujocoEnv, utils.EzPickle):
             pole2_y <= -0.15 or pole2_y >= 0.15
         ):
             self.dead_steps += 1
-        elif self.target_mode == 2 and pole2_y >= -1:
+        elif self.target_mode == 3 and pole2_y >= -1:
             self.dead_steps += 1
         self.steps += 1
 
-        terminated = self.dead_steps > self.dead_steps_termination
+        terminated = (
+            self.dead_steps > self.dead_steps_termination and self.terminate_on_dead
+        )
 
         reward, reward_info = self._get_rew(
             pole1_x, pole1_y, pole2_x, pole2_y, terminated
@@ -238,10 +268,10 @@ class InvertedDoublePendulumEnv(MujocoEnv, utils.EzPickle):
         if self.render_mode == "human":
             self.render()
 
-        if self.steps % self.mode_switch_time == 0:
+        # Switch mode if not training with a fixed mode and mode switch steps reached
+        if self.balance_mode is None and self.steps % self.mode_switch_steps == 0:
             # Sample new mode
-            self.target_mode = self.np_random.integers(0, self.NUM_MODES)
-            # self.dead_steps = 0
+            self.target_mode = self._get_next_mode()
 
         # truncation=False as the time limit is handled by the `TimeLimit` wrapper added during `make`
         return observation, reward, terminated, False, info
@@ -260,13 +290,13 @@ class InvertedDoublePendulumEnv(MujocoEnv, utils.EzPickle):
         if self.target_mode == 0:
             target_tip_y = 2
         elif self.target_mode == 1:
-            target_tip_y = 0.4
+            target_tip_y = 0.6
             # Encourage pole 1 to be negative
-            pole1_distance_penalty = 0.01 * pole1_x**2 + (pole1_y + 1.0) ** 2
+            pole1_distance_penalty = 0.01 * pole1_x**2 + (pole1_y + 1.2) ** 2
         elif self.target_mode == 2:
-            target_tip_y = -0.4
+            target_tip_y = -0.6
             # Encourage pole 1 to be positive
-            pole1_distance_penalty = 0.01 * pole1_x**2 + (pole1_y - 1.0) ** 2
+            pole1_distance_penalty = 0.01 * pole1_x**2 + (pole1_y - 1.2) ** 2
         elif self.target_mode == 3:
             target_tip_y = -2
 
@@ -297,10 +327,19 @@ class InvertedDoublePendulumEnv(MujocoEnv, utils.EzPickle):
             ]
         ).ravel()
 
+    def _get_next_mode(self):
+        if self.switch_order is None:
+            return self.np_random.integers(0, self.NUM_MODES)
+        else:
+            self.switch_index += 1
+            if self.switch_index >= len(self.switch_order):
+                self.switch_index = 0
+            return self.switch_order[self.switch_index]
+
     def reset_model(self):
 
-        noise_low = -self._reset_noise_scale
-        noise_high = self._reset_noise_scale
+        noise_low = -self._slider_reset_noise
+        noise_high = self._slider_reset_noise
 
         self.iterations += 1
 
@@ -308,7 +347,11 @@ class InvertedDoublePendulumEnv(MujocoEnv, utils.EzPickle):
         self.steps = 0
 
         # Sample a random mode
-        self.target_mode = self.np_random.integers(0, self.NUM_MODES)
+        if self.balance_mode is not None:
+            self.target_mode = self.balance_mode
+        else:
+            # Sample a random initial mode
+            self.target_mode = self._get_next_mode()
 
         # Sample dimensions [1,2] from -np.pi to np.pi
         # dimension 0 should use reset_noise_scale
@@ -321,6 +364,6 @@ class InvertedDoublePendulumEnv(MujocoEnv, utils.EzPickle):
         self.set_state(
             init_qpos,
             self.init_qvel
-            + self.np_random.standard_normal(self.model.nv) * self._reset_noise_scale,
+            + self.np_random.standard_normal(self.model.nv) * self._slider_reset_noise,
         )
         return self._get_obs()
