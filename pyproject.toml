@@ -3,8 +3,9 @@ name = "double-pendulum-playground"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = "==3.12.*"
+requires-python = "==3.12.6"
 dependencies = [
+    "brax>=0.12.1",
     "dm-control>=1.0.27",
     "gymnasium[other]>=1.0.0",
     "imageio>=2.37.0",
@@ -14,6 +15,7 @@ dependencies = [
     "mujoco>=3.2.7",
     "mujoco-mjx>=3.3.0",
     "mushroom-rl>=1.10.1",
+    "playground>=0.0.4",
     "pyyaml>=6.0.2",
     "sbx-rl>=0.20.0",
     "stable-baselines3[extra]>=2.5.0",
@@ -21,4 +23,6 @@ dependencies = [
     "torchaudio>=2.6.0",
     "torchvision>=0.21.0",
     "wandb>=0.19.7",
+    "ml_collections",
+    "mediapy>=1.2.2",
 ]

@@ -1,15 +1,20 @@
 __credits__ = ["Kallinteris-Andreas"]
 
-from typing import Dict, Union
+import time
+from pathlib import Path
+from typing import Any, Dict, Optional, Union
 
 import jax
 import jax.numpy as jnp
+import mujoco
 import numpy as np
 from gymnasium import utils
 from gymnasium.envs.mujoco import MujocoEnv
 from gymnasium.spaces import Box
-
-from mjx_env import MJXEnv
+from jax import lax
+from ml_collections import config_dict
+from mujoco import mjx
+from mujoco_playground._src import mjx_env
 
 DEFAULT_CAMERA_CONFIG = {
     "trackbodyid": 0,
@@ -18,7 +23,17 @@ DEFAULT_CAMERA_CONFIG = {
 }
 
 
-class InvertedDoublePendulumEnv(MJXEnv, utils.EzPickle):
+def default_config() -> config_dict.ConfigDict:
+    return config_dict.create(
+        ctrl_dt=0.05,
+        sim_dt=0.01,
+        episode_length=2000,
+        action_repeat=5,
+        vision=False,
+    )
+
+
+class InvertedDoublePendulumEnv(mjx_env.MjxEnv):
     r"""
     ## Description
     This environment originates from control theory and builds on the cartpole environment based on the work of Barto, Sutton, and Anderson in ["Neuronlike adaptive elements that can solve difficult learning control problems"](https://ieeexplore.ieee.org/document/6313077),
@@ -149,7 +164,8 @@ class InvertedDoublePendulumEnv(MJXEnv, utils.EzPickle):
 
     def __init__(
         self,
-        n_envs: int = 32768,
+        config: config_dict.ConfigDict = default_config(),
+        config_overrides: Optional[Dict[str, Union[str, int, list[Any]]]] = None,
         xml_file: str = "./new_pendulum.xml",
         frame_skip: int = 5,
         default_camera_config: Dict[str, Union[float, int]] = {},
@@ -172,9 +188,7 @@ class InvertedDoublePendulumEnv(MJXEnv, utils.EzPickle):
             mode_switch_steps (int, optional): Number of steps before switching modes, if balance_mode is None. Defaults to 1000.
         """
 
-        utils.EzPickle.__init__(
-            self, xml_file, frame_skip, slider_reset_noise, **kwargs
-        )
+        super().__init__(config, config_overrides)
 
         self._healthy_reward = healthy_reward
         self._slider_reset_noise = slider_reset_noise
@@ -183,12 +197,8 @@ class InvertedDoublePendulumEnv(MJXEnv, utils.EzPickle):
         # 0: both upright
         # 1: one up one down, (current state representation won't let us distinguish between the two)
         # 2: both down
-        self.target_modes = None
+        self.target_mode = None
         self.NUM_MODES = 4
-        self.balance_mode = balance_mode
-
-        self.mode_switch_steps = mode_switch_steps
-        self.terminate_on_dead = terminate_on_dead
 
         observation_space = Box(low=-np.inf, high=np.inf, shape=(9,), dtype=np.float64)
 
@@ -209,20 +219,6 @@ class InvertedDoublePendulumEnv(MJXEnv, utils.EzPickle):
             ],
         }
 
-        MJXEnv.__init__(
-            self,
-            n_envs,
-            xml_file,
-            frame_skip,
-            observation_space=observation_space,
-            default_camera_config=default_camera_config,
-            **kwargs,
-        )
-
-        # Start both joints at 180 degrees (pi radians)
-        self.init_qpos.at[1].set(np.pi)
-        self.init_qpos.at[2].set(np.pi)
-
         self.metadata = {
             "render_modes": ["human", "rgb_array", "depth_array"],
             "render_fps": int(np.round(1.0 / self.dt)),
@@ -231,201 +227,187 @@ class InvertedDoublePendulumEnv(MJXEnv, utils.EzPickle):
         self.iterations = 0
 
         self.steps = 0
-        self.dead_steps = 0
         self.dead_steps_termination = 500
+
+        self.balance_mode = balance_mode
+        self.mode_switch_steps = mode_switch_steps
 
         self.switch_order = switch_order
         self.switch_index = None if switch_order is None else -1
 
         self.rng_key = jax.random.key(np.random.randint(0, 2**32))
 
-    def step(self, action):
+        self._xml_path = Path(xml_file)
+        self._mj_model = mujoco.MjModel.from_xml_string(self._xml_path.read_text())
+        self._mj_model.opt.timestep = self.sim_dt
+        self._mjx_model = mjx.put_model(self._mj_model)
+        self._post_init()
 
-        # Convert to jax array
-        action = jnp.asarray(action)
+    def _post_init(self) -> None:
+        # self._pole_body_id = self.mj_model.body("pole").id
+        # hinge_joint_id = self.mj_model.joint("hinge").id
+        # self._hinge_qposadr = self.mj_model.jnt_qposadr[hinge_joint_id]
+        # self._hinge_qveladr = self.mj_model.jnt_dofadr[hinge_joint_id]
 
-        self.do_simulation(action, self.frame_skip)
+        # Do nothing for now
+        pass
 
-        # Unpack the pole positions
-        pole1_x, _, pole1_y = self.mjx_data.site_xpos[:, 0].T
-        pole2_x, _, pole2_y = self.mjx_data.site_xpos[:, 1].T
+    def _get_next_mode(self, info: dict) -> int:
+        rng = info["rng"]
+        switch_index = info["switch_index"]
+        if self.switch_order is None:
+            target_mode = jax.random.randint(rng, (), 0, self.NUM_MODES)
+        else:
+            switch_index += 1
+            if switch_index >= len(self.switch_order):
+                self.switch_index = 0
 
-        observation = self._get_obs()
+        info["switch_index"] = switch_index
+        info["target_mode"] = target_mode
+        info["rng"] = rng
 
-        # Condition for target_mode == 0: if pole2_y <= 1
-        mask0 = (self.target_modes == 0) & (pole2_y <= 1)
+        return info
 
-        # Condition for target_mode in {1, 2}: if pole2_y <= -0.15 or pole2_y >= 0.15
-        mask1 = ((self.target_modes == 1) | (self.target_modes == 2)) & (
-            (pole2_y <= -0.15) | (pole2_y >= 0.15)
+    def reset(self, rng: jax.Array) -> mjx_env.State:
+        rng, rng1 = jax.random.split(rng)
+
+        qpos = jnp.zeros(self.mjx_model.nq)
+        # Set the cart position
+        qpos = qpos.at[0].set(
+            jax.random.uniform(rng1) * self._slider_reset_noise * 2
+            - self._slider_reset_noise
         )
+        qpos = qpos.at[1].set(jax.random.uniform(rng1) * 2 * jnp.pi)
+        qpos = qpos.at[2].set(jax.random.uniform(rng1) * 2 * jnp.pi)
 
-        # Condition for target_mode == 3: if pole2_y >= -1
-        mask2 = (self.target_modes == 3) & (pole2_y >= -1)
+        qvel = jnp.zeros(self.mjx_model.nv)
+        qvel = qvel.at[0].set(jax.random.normal(rng1) * self._slider_reset_noise)
+        qvel = qvel.at[1].set(jax.random.normal(rng1) * self._slider_reset_noise)
+        qvel = qvel.at[2].set(jax.random.normal(rng1) * self._slider_reset_noise)
 
-        # Create an increment array: each element gets a 1 if any condition is met
-        increment = (
-            mask0.astype(jnp.int32) + mask1.astype(jnp.int32) + mask2.astype(jnp.int32)
-        )
+        data = mjx_env.init(self.mjx_model, qpos=qpos, qvel=qvel)
 
-        self.dead_steps += increment
+        metrics = {}
+        info = {"rng": rng, "switch_index": 0}
 
-        self.steps += 1
+        # Sample a random mode
+        if self.balance_mode is not None:
+            info["target_mode"] = self.balance_mode
+        else:
+            # Sample a random initial mode
+            info = self._get_next_mode(info)
 
-        terminated = jnp.logical_and(
-            self.dead_steps > self.dead_steps_termination, self.terminate_on_dead
-        )
+        reward, done = jnp.zeros(2)  # pylint: disable=redefined-outer-name
+        obs = self._get_obs(data, info)
+        return mjx_env.State(data, obs, reward, done, metrics, info)
 
-        reward, reward_info = self._get_rew(
-            pole1_x, pole1_y, pole2_x, pole2_y, terminated
-        )
+    def step(self, state: mjx_env.State, action: jax.Array) -> mjx_env.State:
 
-        info = reward_info
+        data = mjx_env.step(self.mjx_model, state.data, action, self.n_substeps)
 
-        if self.render_mode == "human":
-            self.render()
+        reward = self._get_reward(data, action, state.info, state.metrics)
+
+        obs = self._get_obs(data, state.info)
+
+        # TODO: Do we need all envs to exit if one is done?
+        done = jnp.isnan(data.qpos).any() | jnp.isnan(data.qvel).any()
+        done = done.astype(float)
 
         # Switch mode if not training with a fixed mode and mode switch steps reached
         if self.balance_mode is None and self.steps % self.mode_switch_steps == 0:
             # Sample new mode
-            self.target_mode = self._get_next_mode()
+            info = self._get_next_mode(state.info)
 
-        # truncation=False as the time limit is handled by the `TimeLimit` wrapper added during `make`
-        return observation, reward, terminated, False, info
+        return mjx_env.State(data, obs, reward, done, state.metrics, info)
 
-    def _get_rew(self, pole1_x, pole1_y, pole2_x, pole2_y, terminated):
+    def _get_reward(
+        self,
+        data: mjx.Data,
+        action: jax.Array,
+        info: dict[str, Any],
+        metrics: dict[str, Any],
+    ) -> jax.Array:
 
         # Assuming self.data.qvel is now a batched array with shape (n_envs, nv)
-        qvel = self.mjx_data.qvel
+        qvel = data.qvel
         # Extract the relevant velocity components for each environment
-        v1 = qvel[:, 1]
-        v2 = qvel[:, 2]
+        v1 = qvel[1]
+        v2 = qvel[2]
         vel_penalty = 1e-3 * v1**2 + 5e-3 * v2**2
+
+        # Extract the relevant position components for each environment
+        pole1_x, _, pole1_y = data.site_xpos[0]
+        pole2_x, _, pole2_y = data.site_xpos[1]
 
         # Compute alive bonus: terminated is a boolean array, so 1 if not terminated, else 0.
         # (We subtract the boolean converted to int.)
-        alive_bonus = self._healthy_reward * (1 - terminated.astype(jnp.int32))
+        alive_bonus = self._healthy_reward
 
-        # Determine the target tip y-coordinate based on target_mode
-        # For modes not explicitly handled, we default to 0.0 (or raise an error if that makes more sense)
-        conditions = [
-            self.target_modes == 0,
-            self.target_modes == 1,
-            self.target_modes == 2,
-            self.target_modes == 3,
-        ]
-        choices = [2.0, 0.6, -0.6, -2.0]
-        target_tip_y = jnp.select(conditions, choices, default=0.0)
+        target_mode = info["target_mode"]
 
-        # For modes 1 and 2, we add a pole1 distance penalty; otherwise it's 0.
-        conditions = [self.target_modes == 1, self.target_modes == 2]
-        choices = [
-            0.01 * pole1_x**2 + (pole1_y + 1.2) ** 2,  # Penalty when target_mode == 1
-            0.01 * pole1_x**2 + (pole1_y - 1.2) ** 2,  # Penalty when target_mode == 2
-        ]
-        pole1_distance_penalty = jnp.select(conditions, choices, default=0.0)
+        # Define branch functions for each target mode.
+        def mode0(_):
+            # target_mode == 0: No additional penalty on pole1.
+            return 2.0, 0.0
 
-        # Distance penalty for the tip of the second pole
+        def mode1(_):
+            # target_mode == 1: target_tip_y = 0.6 and add penalty encouraging pole1_y to be near -1.2.
+            target_tip_y = 0.6
+            penalty = 0.01 * pole1_x**2 + (pole1_y + 1.2) ** 2
+            return target_tip_y, penalty
+
+        def mode2(_):
+            # target_mode == 2: target_tip_y = -0.6 and add penalty encouraging pole1_y to be near 1.2.
+            target_tip_y = -0.6
+            penalty = 0.01 * pole1_x**2 + (pole1_y - 1.2) ** 2
+            return target_tip_y, penalty
+
+        def mode3(_):
+            # target_mode == 3: target_tip_y = -2 with no additional pole1 penalty.
+            return -2.0, 0.0
+
+        # Use lax.switch to select the appropriate branch.
+        target_tip_y, pole1_distance_penalty = lax.switch(
+            target_mode, [mode0, mode1, mode2, mode3], operand=None
+        )
+
+        # Compute the penalty for the second pole.
         dist_penalty = 0.01 * pole2_x**2 + (pole2_y - target_tip_y) ** 2
-
         # Compute the overall reward
         reward = alive_bonus - dist_penalty - vel_penalty - pole1_distance_penalty
 
-        reward_info = {
-            "distance_penalty": -dist_penalty,
-            "velocity_penalty": -vel_penalty,
-        }
+        return reward
 
-        return reward, reward_info
+    def _get_obs(self, data, info):
 
-    def _get_obs(self):
+        target_mode_one_hot = jnp.eye(self.NUM_MODES)[info["target_mode"]]
+        # Squeeze (1, 4) to (4,)
+        target_mode_one_hot = jnp.squeeze(target_mode_one_hot)
 
         # qpos: cart x pos, link 0, link 1, target mode
         return jnp.concatenate(
             [
-                self.mjx_data.qpos[:, :1],
-                jnp.sin(self.mjx_data.qpos[:, 1:]),
-                jnp.cos(self.mjx_data.qpos[:, 1:]),
-                jnp.clip(self.mjx_data.qvel, -10, 10),
-                jnp.clip(self.mjx_data.qfrc_constraint, -10, 10)[:, :1],
-                self.target_modes[:, None],
+                data.qpos[:1],
+                jnp.sin(data.qpos[1:]),
+                jnp.cos(data.qpos[1:]),
+                jnp.clip(data.qvel, -10, 10),
+                jnp.clip(data.qfrc_constraint, -10, 10)[:1],
+                target_mode_one_hot,
             ],
-            axis=-1,
         )
 
-    def _get_next_mode(self):
-        if self.switch_order is None:
-            return jax.random.randint(self.rng_key, (self.n_envs,), 0, self.NUM_MODES)
-        else:
-            self.switch_index += 1
-            if self.switch_index >= len(self.switch_order):
-                self.switch_index = 0
+    @property
+    def xml_path(self) -> str:
+        return self._xml_path
 
-            # Create array
-            return jnp.array([self.switch_order[self.switch_index]] * self.n_envs)
+    @property
+    def action_size(self) -> int:
+        return self.mjx_model.nu
 
-    def reset_model(self):
+    @property
+    def mj_model(self) -> mujoco.MjModel:
+        return self._mj_model
 
-        noise_low = -self._slider_reset_noise
-        noise_high = self._slider_reset_noise
-
-        self.iterations += 1
-
-        self.dead_steps = jnp.zeros(self.n_envs)
-        self.steps = 0
-
-        # Sample a random mode
-        if self.balance_mode is not None:
-            # Sample n_envs target modes
-            # self.target_modes = self.np_random.integers(0, self.NUM_MODES, self.n_envs)
-            # jax
-            self.target_modes = jax.random.randint(
-                self.rng_key, (self.n_envs,), 0, self.NUM_MODES
-            )
-        else:
-            # Sample a random initial mode
-            self.target_modes = self._get_next_mode()
-
-        # Sample dimensions [1,2] from -np.pi to np.pi
-        # dimension 0 should use reset_noise_scale
-
-        rng_keys = jax.random.split(self.rng_key, self.n_envs)
-
-        def sample_all(key):
-            key1, key2 = jax.random.split(key)
-            angles = jax.random.uniform(key1, shape=(2,), minval=0, maxval=2 * jnp.pi)
-            noise = jax.random.uniform(
-                key2, shape=(), minval=noise_low, maxval=noise_high
-            )
-            return angles, noise
-
-        angles_init, slider_init = jax.vmap(sample_all)(
-            rng_keys
-        )  # shapes: (n_envs, 2) and (n_envs,)
-
-        init_qpos = jnp.concatenate(
-            [
-                slider_init[:, None],
-                angles_init,
-            ],
-            axis=-1,
-        )
-
-        # Generate a (n_envs, model.nv) array of noise
-        init_qvel = (
-            jax.random.normal(self.rng_key, shape=(self.n_envs, self.model.nv))
-            * self._slider_reset_noise
-        )
-
-        # Sample init_qvel
-
-        # self.set_state(
-        #     init_qpos,
-        #     init_qvel,
-        # )
-
-        # breakpoint()
-        reset_fn = jax.jit(jax.vmap(self.set_state, in_axes=(0, 0)))
-        self.mjx_data = reset_fn(init_qpos, init_qvel)
-
-        return self._get_obs()
+    @property
+    def mjx_model(self) -> mjx.Model:
+        return self._mjx_model
