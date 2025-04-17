@@ -9,17 +9,15 @@ from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.policies import ActorCriticPolicy
 from stable_baselines3.common.vec_env import SubprocVecEnv, VecVideoRecorder
-from wandb.integration.sb3 import WandbCallback
 
 import wandb
+from wandb.integration.sb3 import WandbCallback
 
 register(
     id="CustomDoublePendulum-v0",
     entry_point="inverted_double_pendulum:InvertedDoublePendulumEnv",
     max_episode_steps=2000,
 )
-
-# env = gym.make("CustomDoublePendulum-v0")
 
 
 def main():
@@ -39,7 +37,10 @@ def main():
 
     # Parallel environments
     vec_env = make_vec_env(
-        "CustomDoublePendulum-v0", n_envs=n_envs, vec_env_cls=SubprocVecEnv
+        "CustomDoublePendulum-v0",
+        n_envs=n_envs,
+        vec_env_cls=SubprocVecEnv,
+        # env_kwargs={"balance_mode": 2},
     )
 
     # Save a checkpoint every 1000 steps
