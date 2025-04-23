@@ -1,0 +1,279 @@
+# config.yml
+
+save_dir: "video1_data/visualizations"
+
+button_image_path: "assets/button_placeholder.png"
+
+visualizations:
+  - name: "0_percent"
+
+    # 1. environment settings
+    env:
+      switch_order: [3, 1, 2, 0, 1, 2]
+      mode_switch_steps: 150
+      ignore_done: true
+
+    # 2. model & rollout
+    model:
+      path: "video1_data/models/first_working/avid-rain-101_0_steps"
+      deterministic: false
+
+    # 3. recording settings
+    recording:
+      fast: true # override via CLI flag if you like
+      alpha: true # If alpha is enabled, the background will be transparent
+
+  - name: "10_percent"
+
+    # 1. environment settings
+    env:
+      switch_order: [3, 1, 2, 0, 1, 2]
+      mode_switch_steps: 150
+      ignore_done: true
+
+    # 2. model & rollout
+    model:
+      path: "video1_data/models/first_working/avid-rain-101_60000000_steps"
+      deterministic: false
+
+    # 3. recording settings
+    recording:
+      fast: true # override via CLI flag if you like
+      alpha: true # If alpha is enabled, the background will be transparent
+
+  - name: "20_percent"
+
+    # 1. environment settings
+    env:
+      switch_order: [3, 1, 2, 0, 1, 2]
+      mode_switch_steps: 150
+      ignore_done: true
+
+    # 2. model & rollout
+    model:
+      path: "video1_data/models/first_working/avid-rain-101_120000000_steps"
+      deterministic: false
+
+    # 3. recording settings
+    recording:
+      fast: true # override via CLI flag if you like
+      alpha: true # If alpha is enabled, the background will be transparent
+
+  - name: "30_percent"
+
+    # 1. environment settings
+    env:
+      switch_order: [3, 1, 2, 0, 1, 2]
+      mode_switch_steps: 150
+      ignore_done: true
+
+    # 2. model & rollout
+    model:
+      path: "video1_data/models/first_working/avid-rain-101_180000000_steps"
+      deterministic: false
+
+    # 3. recording settings
+    recording:
+      fast: true # override via CLI flag if you like
+      alpha: true # If alpha is enabled, the background will be transparent
+
+  - name: "40_percent"
+
+    # 1. environment settings
+    env:
+      switch_order: [3, 1, 2, 0, 1, 2]
+      mode_switch_steps: 150
+      ignore_done: true
+
+    # 2. model & rollout
+    model:
+      path: "video1_data/models/first_working/avid-rain-101_240000000_steps"
+      deterministic: false
+
+    # 3. recording settings
+    recording:
+      fast: true # override via CLI flag if you like
+      alpha: true # If alpha is enabled, the background will be transparent
+
+  - name: "50_percent"
+
+    # 1. environment settings
+    env:
+      switch_order: [3, 1, 2, 0, 1, 2]
+      mode_switch_steps: 150
+      ignore_done: true
+
+    # 2. model & rollout
+    model:
+      path: "video1_data/models/first_working/avid-rain-101_300000000_steps"
+      deterministic: false
+
+    # 3. recording settings
+    recording:
+      fast: true # override via CLI flag if you like
+      alpha: true # If alpha is enabled, the background will be transparent
+
+  - name: "60_percent"
+
+    # 1. environment settings
+    env:
+      switch_order: [3, 1, 2, 0, 1, 2]
+      mode_switch_steps: 150
+      ignore_done: true
+
+    # 2. model & rollout
+    model:
+      path: "video1_data/models/first_working/avid-rain-101_360000000_steps"
+      deterministic: false
+
+    # 3. recording settings
+    recording:
+      fast: true # override via CLI flag if you like
+      alpha: true # If alpha is enabled, the background will be transparent
+
+  - name: "70_percent"
+
+    # 1. environment settings
+    env:
+      switch_order: [3, 1, 2, 0, 1, 2]
+      mode_switch_steps: 150
+      ignore_done: true
+
+    # 2. model & rollout
+    model:
+      path: "video1_data/models/first_working/avid-rain-101_420000000_steps"
+      deterministic: false
+
+    # 3. recording settings
+    recording:
+      fast: true # override via CLI flag if you like
+      alpha: true # If alpha is enabled, the background will be transparent
+
+  - name: "80_percent"
+
+    # 1. environment settings
+    env:
+      switch_order: [3, 1, 2, 0, 1, 2]
+      mode_switch_steps: 150
+      ignore_done: true
+
+    # 2. model & rollout
+    model:
+      path: "video1_data/models/first_working/avid-rain-101_480000000_steps"
+      deterministic: false
+
+    # 3. recording settings
+    recording:
+      fast: true # override via CLI flag if you like
+      alpha: true # If alpha is enabled, the background will be transparent
+
+  - name: "90_percent"
+
+    # 1. environment settings
+    env:
+      switch_order: [3, 1, 2, 0, 1, 2]
+      mode_switch_steps: 150
+      ignore_done: true
+
+    # 2. model & rollout
+    model:
+      path: "video1_data/models/first_working/avid-rain-101_540000000_steps"
+      deterministic: false
+
+    # 3. recording settings
+    recording:
+      fast: true # override via CLI flag if you like
+      alpha: true # If alpha is enabled, the background will be transparent
+
+  - name: "100_percent"
+
+    # 1. environment settings
+    env:
+      switch_order: [3, 1, 2, 0, 1, 2]
+      mode_switch_steps: 150
+      ignore_done: true
+
+    # 2. model & rollout
+    model:
+      path: "video1_data/models/first_working/avid-rain-101_600000000_steps"
+      deterministic: false
+
+    # 3. recording settings
+    recording:
+      fast: true # override via CLI flag if you like
+      alpha: true # If alpha is enabled, the background will be transparent
+
+  - name: "100_percent_no_noise"
+
+    # 1. environment settings
+    env:
+      switch_order: [3, 1, 2, 0, 1, 2]
+      mode_switch_steps: 150
+      ignore_done: true
+
+    # 2. model & rollout
+    model:
+      path: "video1_data/models/first_working/avid-rain-101_600000000_steps"
+      deterministic: true
+
+    # 3. recording settings
+    recording:
+      fast: true # override via CLI flag if you like
+      alpha: true # If alpha is enabled, the background will be transparent
+
+  - name: "all_transitions"
+
+    # 1. environment settings
+    env:
+      switch_order: [3, 2, 3, 1, 3, 0, 2, 1, 2, 0, 1, 2]
+      mode_switch_steps: 150
+      ignore_done: true
+
+    # 2. model & rollout
+    model:
+      path: "video1_data/models/first_working/avid-rain-101_540000000_steps"
+      deterministic: true
+
+    # 3. recording settings
+    recording:
+      fast: true # override via CLI flag if you like
+      alpha: true # If alpha is enabled, the background will be transparent
+
+  - name: "no_actions_swingup"
+
+    # 1. environment settings
+    env:
+      switch_order: [0]
+      mode_switch_steps: 400
+      ignore_done: true
+      init_qpos: [0, 3., 0]
+
+    # 2. model & rollout
+    model:
+      path: ""
+      deterministic: true
+
+    # 3. recording settings
+    recording:
+      fast: true # override via CLI flag if you like
+      alpha: true # If alpha is enabled, the background will be transparent
+
+  - name: "trained_swingup"
+
+    # 1. environment settings
+    env:
+      switch_order: [0]
+      mode_switch_steps: 400
+      ignore_done: true
+      init_qpos: [0, 3., 0]
+
+    # 2. model & rollout
+    model:
+      path: "video1_data/models/first_working/avid-rain-101_540000000_steps"
+      deterministic: true
+
+    # 3. recording settings
+    recording:
+      fast: true # override via CLI flag if you like
+      alpha: true # If alpha is enabled, the background will be transparent
+
