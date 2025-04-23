@@ -1,4 +1,6 @@
 import subprocess
+import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 import click
@@ -66,254 +68,210 @@ def make_white_background_transparent(bgr_image, threshold=250):
     return bgra
 
 
-@click.command()
-@click.option(
-    "--save-dir", default="output", help="Directory to save the visualization outputs."
-)
-# Required parameter for vis config
-@click.argument("config", type=click.Path(exists=True))
-def main(save_dir, config):
-
-    # Make the save directory if it doesn't exist
-    save_dir = Path(save_dir)
-    save_dir.mkdir(parents=True, exist_ok=True)
-
-    # Confirm that config is a valid file and is yml
-    config_path = Path(config)
-    if not config_path.is_file():
-        raise ValueError(f"Config path {config} is not a valid file.")
-
-    if config_path.suffix != ".yml":
-        raise ValueError(f"Config path {config} must be a .yml file.")
-
-    # Load the config file
-    with open(config_path, "r") as file:
-        config_data = yaml.safe_load(file)
-
-    if "visualizations" not in config_data:
-        raise ValueError(f"Config file {config} must contain 'visualizations' section.")
-
-    if "button_image" not in config_data:
-        button_image_path = Path("assets/button_placeholder.png")
-    else:
-        button_image_path = Path(config_data["button_image_path"])
-
-    # Check if the button image exists
-    if not button_image_path.exists():
-        raise ValueError(
-            f"Button image path {button_image_path} does not exist. Please provide a valid path in the config."
-        )
-
-    # Confirm that it exists
-
-    # Use rich to print the names of all of the visualizations, nicely formatted
+def render_viz(visualization, save_dir, button_image_path):
+    """
+    All the logic you had inside the per-visualization loop:
+    - mkdir for vis_dir
+    - load model
+    - set up vec_env
+    - start ffmpeg procs
+    - step/render loop
+    - close procs
+    - plotting and stats dumping
+    """
+    name = visualization["name"]
     console = Console()
+    console.print(f"[bold green]Rendering visualization:[/bold green] {name}")
 
-    # Check if config has a save_dir field
-    if "save_dir" in config_data:
-        save_dir = Path(config_data["save_dir"])
+    vis_dir = Path(save_dir) / name
+    vis_dir.mkdir(parents=True, exist_ok=True)
 
-        # Warn user, in yellow, that the save_dir is being overridden
-        console.print(
-            f"[bold yellow]Warning: Save directory overridden to [bold]{save_dir}[/bold][/bold yellow]"
-        )
+    # — load & configure env/model exactly as before —
+    # — launch ffmpeg subprocesses —
+    # — run the step/render loop, write to stdin of each ffmpeg proc —
+    # — wait() on each proc —
+    # — do your matplotlib saving and stats file —
 
-    console.print(
-        "[bold underline green]Visualizations to be rendered:[/bold underline green]"
+    name = visualization.get("name")
+
+    vis_dir = save_dir / name
+
+    # Make the visualization directory if it doesn't exist
+    vis_dir.mkdir(parents=True, exist_ok=True)
+
+    if visualization["recording"]["fast"]:
+        # Set resolution to 640x480
+        resolution = (640, 480)
+        # Set the camera configuration to fast
+        camera_config = FAST_CAMERA_CONFIG
+    else:
+        resolution = (3840, 2160)  # 4K resolution
+        camera_config = CAMERA_READY_CAMERA_CONFIG
+
+    # Whether or not to render transparent background
+    transparent = visualization["recording"]["alpha"]
+
+    # Load model
+    model_path = visualization["model"]["path"]
+    if not model_path == "":
+        model = PPO.load(model_path)
+    else:
+        model = None
+
+    mode_switch_steps = visualization["env"]["mode_switch_steps"]
+    switch_order = visualization["env"]["switch_order"]
+
+    init_qpos = None
+    if "init_qpos" in visualization["env"]:
+        init_qpos = np.array(visualization["env"]["init_qpos"])
+
+    vec_env = make_vec_env(
+        "CustomDoublePendulum-v0",
+        n_envs=1,
+        env_kwargs={
+            "mode_switch_steps": visualization["env"]["mode_switch_steps"],
+            "switch_order": visualization["env"]["switch_order"],
+            "camera_config": camera_config,
+            "render_resolution": resolution,
+            "terminate_on_dead": False,
+            "init_qpos": init_qpos,
+        },
     )
 
-    for viz in config_data["visualizations"]:
-        name = viz.get("name")
-        if name is None:
-            raise ValueError(
-                f"Visualization in config file {config} must have a 'name' field."
-            )
-        console.print(f"  • [yellow]{name}[/yellow]")
+    if visualization["recording"]["fast"]:
 
-    for visualization in config_data["visualizations"]:
+        frame_skip = vec_env.envs[0].unwrapped.frame_skip
 
-        name = visualization.get("name")
-
-        console.print(f"[bold green]Rendering visualization:[/bold green] {name}")
-
-        vis_dir = save_dir / name
-
-        # Make the visualization directory if it doesn't exist
-        vis_dir.mkdir(parents=True, exist_ok=True)
-
-        if visualization["recording"]["fast"]:
-            # Set resolution to 640x480
-            resolution = (640, 480)
-            # Set the camera configuration to fast
-            camera_config = FAST_CAMERA_CONFIG
-        else:
-            resolution = (3840, 2160)  # 4K resolution
-            camera_config = CAMERA_READY_CAMERA_CONFIG
-
-        # Whether or not to render transparent background
-        transparent = visualization["recording"]["alpha"]
-
-        # Load model
-        model_path = visualization["model"]["path"]
-        if not model_path == "":
-            model = PPO.load(model_path)
-        else:
-            model = None
-
-        mode_switch_steps = visualization["env"]["mode_switch_steps"]
-        switch_order = visualization["env"]["switch_order"]
-
-        init_qpos = None
-        if "init_qpos" in visualization["env"]:
-            init_qpos = np.array(visualization["env"]["init_qpos"])
-
-        vec_env = make_vec_env(
-            "CustomDoublePendulum-v0",
-            n_envs=1,
-            env_kwargs={
-                "mode_switch_steps": visualization["env"]["mode_switch_steps"],
-                "switch_order": visualization["env"]["switch_order"],
-                "camera_config": camera_config,
-                "render_resolution": resolution,
-                "terminate_on_dead": False,
-                "init_qpos": init_qpos,
-            },
+        # Set frame skip to 1
+        vec_env.envs[0].unwrapped.frame_skip = 1
+        # Update render fps to match the frame skip
+        vec_env.envs[0].unwrapped.metadata["render_fps"] = 1.0 / (
+            vec_env.envs[0].unwrapped.dt
         )
 
-        if visualization["recording"]["fast"]:
+        vec_env.envs[0].unwrapped.mode_switch_steps *= frame_skip
+    else:
 
-            frame_skip = vec_env.envs[0].unwrapped.frame_skip
+        frame_skip = 1
 
-            # Set frame skip to 1
-            vec_env.envs[0].unwrapped.frame_skip = 1
-            # Update render fps to match the frame skip
-            vec_env.envs[0].unwrapped.metadata["render_fps"] = 1.0 / (
-                vec_env.envs[0].unwrapped.dt
-            )
+    obs = vec_env.reset()
 
-            vec_env.envs[0].unwrapped.mode_switch_steps *= frame_skip
-        else:
+    # Test render once to get frame size
+    bgr_frame = vec_env.render()  # Typically BGR with shape [H, W, 3]
 
-            frame_skip = 1
+    if transparent:
+        bgra_frame = make_white_background_transparent(bgr_frame)
+    else:
+        bgra_frame = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2BGRA)
 
-        obs = vec_env.reset()
+    # We can access the viewer in case we want to change camera angles
+    # viewer = vec_env.envs[0].unwrapped.mujoco_renderer.viewer
+    # viewer.cam.azimuth = 110
+    # viewer.cam.elevation = -30
 
-        # Test render once to get frame size
-        bgr_frame = vec_env.render()  # Typically BGR with shape [H, W, 3]
+    fps = vec_env.envs[0].unwrapped.metadata["render_fps"]
 
-        if transparent:
-            bgra_frame = make_white_background_transparent(bgr_frame)
-        else:
-            bgra_frame = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2BGRA)
+    video_path_main = vis_dir / f"{name}_video.mov"
 
-        # We can access the viewer in case we want to change camera angles
-        # viewer = vec_env.envs[0].unwrapped.mujoco_renderer.viewer
-        # viewer.cam.azimuth = 110
-        # viewer.cam.elevation = -30
+    # --------------------
+    # 1) Start an FFmpeg subprocess in ProRes 4444 mode
+    # --------------------
+    ffmpeg_cmd_main = [
+        "ffmpeg",
+        "-y",  # overwrite output file if it exists
+        "-loglevel",
+        "error",  # suppress all but error messages
+        "-f",
+        "rawvideo",  # input format is raw video data
+        "-pix_fmt",
+        "bgra",  # our frames are in BGRA channel order
+        "-s",
+        f"{resolution[0]}x{resolution[1]}",
+        "-r",
+        str(fps),
+        "-i",
+        "-",  # read from stdin
+        "-c:v",
+        "prores_ks",  # use the prores_ks encoder
+        "-pix_fmt",
+        "yuva444p10le",  # 10-bit YUV + alpha
+        video_path_main,
+    ]
 
-        fps = vec_env.envs[0].unwrapped.metadata["render_fps"]
+    video_path_left_button = vis_dir / f"{name}_left_button.mov"
 
-        video_path_main = vis_dir / f"{name}_video.mov"
+    # Open the button image and get its reoslution
+    button_img = cv2.imread(button_image_path, cv2.IMREAD_UNCHANGED)
 
-        # --------------------
-        # 1) Start an FFmpeg subprocess in ProRes 4444 mode
-        # --------------------
-        ffmpeg_cmd_main = [
-            "ffmpeg",
-            "-y",  # overwrite output file if it exists
-            "-loglevel",
-            "error",  # suppress all but error messages
-            "-f",
-            "rawvideo",  # input format is raw video data
-            "-pix_fmt",
-            "bgra",  # our frames are in BGRA channel order
-            "-s",
-            f"{resolution[0]}x{resolution[1]}",
-            "-r",
-            str(fps),
-            "-i",
-            "-",  # read from stdin
-            "-c:v",
-            "prores_ks",  # use the prores_ks encoder
-            "-pix_fmt",
-            "yuva444p10le",  # 10-bit YUV + alpha
-            video_path_main,
-        ]
+    button_resolution = button_img.shape
 
-        video_path_left_button = vis_dir / f"{name}_left_button.mov"
+    ffmpeg_cmd_left_button = [
+        "ffmpeg",
+        "-y",  # overwrite output file if it exists
+        "-loglevel",
+        "error",  # suppress all but error messages
+        "-f",
+        "rawvideo",  # input format is raw video data
+        "-pix_fmt",
+        "bgra",  # our frames are in BGRA channel order
+        "-s",
+        f"{button_resolution[0]}x{button_resolution[1]}",
+        "-r",
+        str(fps),
+        "-i",
+        "-",  # read from stdin
+        "-c:v",
+        "prores_ks",  # use the prores_ks encoder
+        "-pix_fmt",
+        "yuva444p10le",  # 10-bit YUV + alpha
+        video_path_left_button,
+    ]
 
-        # Open the button image and get its reoslution
-        button_img = cv2.imread(button_image_path, cv2.IMREAD_UNCHANGED)
+    video_path_right_button = vis_dir / f"{name}_right_button.mov"
+    ffmpeg_cmd_right_button = [
+        "ffmpeg",
+        "-y",  # overwrite output file if it exists
+        "-loglevel",
+        "error",  # suppress all but error messages
+        "-f",
+        "rawvideo",  # input format is raw video data
+        "-pix_fmt",
+        "bgra",  # our frames are in BGRA channel order
+        "-s",
+        f"{button_resolution[0]}x{button_resolution[1]}",
+        "-r",
+        str(fps),
+        "-i",
+        "-",  # read from stdin
+        "-c:v",
+        "prores_ks",  # use the prores_ks encoder
+        "-pix_fmt",
+        "yuva444p10le",  # 10-bit YUV + alpha
+        video_path_right_button,
+    ]
 
-        button_resolution = button_img.shape
+    ffmpeg_proc_main = subprocess.Popen(ffmpeg_cmd_main, stdin=subprocess.PIPE)
+    ffmpeg_proc_left_button = subprocess.Popen(
+        ffmpeg_cmd_left_button, stdin=subprocess.PIPE
+    )
+    ffmpeg_proc_right_button = subprocess.Popen(
+        ffmpeg_cmd_right_button, stdin=subprocess.PIPE
+    )
 
-        ffmpeg_cmd_left_button = [
-            "ffmpeg",
-            "-y",  # overwrite output file if it exists
-            "-loglevel",
-            "error",  # suppress all but error messages
-            "-f",
-            "rawvideo",  # input format is raw video data
-            "-pix_fmt",
-            "bgra",  # our frames are in BGRA channel order
-            "-s",
-            f"{button_resolution[0]}x{button_resolution[1]}",
-            "-r",
-            str(fps),
-            "-i",
-            "-",  # read from stdin
-            "-c:v",
-            "prores_ks",  # use the prores_ks encoder
-            "-pix_fmt",
-            "yuva444p10le",  # 10-bit YUV + alpha
-            video_path_left_button,
-        ]
+    # (Optional) If you also want a live display:
+    cv2.namedWindow("Pendulum", cv2.WINDOW_NORMAL)
 
-        video_path_right_button = vis_dir / f"{name}_right_button.mov"
-        ffmpeg_cmd_right_button = [
-            "ffmpeg",
-            "-y",  # overwrite output file if it exists
-            "-loglevel",
-            "error",  # suppress all but error messages
-            "-f",
-            "rawvideo",  # input format is raw video data
-            "-pix_fmt",
-            "bgra",  # our frames are in BGRA channel order
-            "-s",
-            f"{button_resolution[0]}x{button_resolution[1]}",
-            "-r",
-            str(fps),
-            "-i",
-            "-",  # read from stdin
-            "-c:v",
-            "prores_ks",  # use the prores_ks encoder
-            "-pix_fmt",
-            "yuva444p10le",  # 10-bit YUV + alpha
-            video_path_right_button,
-        ]
+    ignore_done = visualization["env"]["ignore_done"]
+    deterministic = visualization["model"]["deterministic"]
 
-        ffmpeg_proc_main = subprocess.Popen(ffmpeg_cmd_main, stdin=subprocess.PIPE)
-        ffmpeg_proc_left_button = subprocess.Popen(
-            ffmpeg_cmd_left_button, stdin=subprocess.PIPE
-        )
-        ffmpeg_proc_right_button = subprocess.Popen(
-            ffmpeg_cmd_right_button, stdin=subprocess.PIPE
-        )
+    total_steps = mode_switch_steps * len(switch_order)
 
-        # (Optional) If you also want a live display:
-        cv2.namedWindow("Pendulum", cv2.WINDOW_NORMAL)
-
-        ignore_done = visualization["env"]["ignore_done"]
-        deterministic = visualization["model"]["deterministic"]
-
-        total_steps = mode_switch_steps * len(switch_order)
-
-        # Prepare containers
-        actions_list = []
-        rewards_list = []
-        distance_penalty_list = []
-        velocity_penalty_list = []
-
+    # Prepare containers
+    actions_list = []
+    rewards_list = []
+    distance_penalty_list = []
+    velocity_penalty_list = []
+    try:
         with Progress(
             SpinnerColumn(),
             TextColumn("[bold cyan]{task.description}"),
@@ -416,18 +374,6 @@ def main(save_dir, config):
                 # Update the progress bar
                 progress.update(task, advance=1, target_mode=target_mode)
 
-        # --------------------
-        # 4) Cleanly close FFmpeg
-        # --------------------
-        ffmpeg_proc_main.stdin.close()
-        ffmpeg_proc_main.wait()
-
-        ffmpeg_proc_left_button.stdin.close()
-        ffmpeg_proc_left_button.wait()
-
-        ffmpeg_proc_right_button.stdin.close()
-        ffmpeg_proc_right_button.wait()
-
         # ----------------------------------
         # Now: plot Actions vs Step
         # ----------------------------------
@@ -499,8 +445,6 @@ def main(save_dir, config):
         )
         plt.close(fig)
 
-        cv2.destroyAllWindows()
-
         total_reward = np.sum(rewards_arr)
 
         # Write statistics to a text file
@@ -509,6 +453,98 @@ def main(save_dir, config):
             f.write(f"Total reward: {total_reward}\n")
             f.write(f"Total steps: {total_steps}\n")
             f.write(f"Average reward: {total_reward / total_steps}\n")
+    except KeyboardInterrupt:
+        Console().print(f"[yellow]Interrupted rendering {name}, cleaning up…[/yellow]")
+
+    finally:
+        # --------------------
+        # 4) Cleanly close FFmpeg
+        # --------------------
+        ffmpeg_proc_main.stdin.close()
+        ffmpeg_proc_main.wait()
+
+        ffmpeg_proc_left_button.stdin.close()
+        ffmpeg_proc_left_button.wait()
+
+        ffmpeg_proc_right_button.stdin.close()
+        ffmpeg_proc_right_button.wait()
+
+        cv2.destroyAllWindows()
+
+
+@click.command()
+@click.option("--save-dir", default="output", help="Where to save outputs.")
+@click.option(
+    "--workers",
+    "-w",
+    default=1,
+    type=int,
+    help="Number of parallel workers for rendering.",
+)
+@click.argument("config", type=click.Path(exists=True))
+def main(save_dir, workers, config):
+
+    save_dir = Path(save_dir)
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    # load config
+    with open(config, "r") as f:
+        cfg = yaml.safe_load(f)
+    if "visualizations" not in cfg:
+        raise click.UsageError("config.yml must have top-level 'visualizations'")
+    console = Console()
+
+    # Check if config has a save_dir field
+    if "save_dir" in cfg:
+        save_dir = Path(cfg["save_dir"])
+
+        # Warn user, in yellow, that the save_dir is being overridden
+        console.print(
+            f"[bold yellow]Warning: Save directory overridden to [bold]{save_dir}[/bold][/bold yellow]"
+        )
+
+    console.print(
+        "[bold underline green]Visualizations to be rendered:[/bold underline green]"
+    )
+    for viz in cfg["visualizations"]:
+        console.print(f"  • [yellow]{viz.get('name')}[/yellow]")
+
+    # locate button image once
+    button_image_path = Path(
+        cfg.get("button_image_path", "assets/button_placeholder.png")
+    )
+    if not button_image_path.exists():
+        raise click.FileError(str(button_image_path), hint="button image not found")
+
+    viz_list = cfg["visualizations"]
+
+    if workers > 1:
+        console.print(f"[cyan]Spawning up to {workers} workers…[/cyan]")
+        exe = ProcessPoolExecutor(max_workers=workers)
+        try:
+            futures = {
+                exe.submit(render_viz, viz, save_dir, button_image_path): viz
+                for viz in viz_list
+            }
+            for fut in as_completed(futures):
+                viz = futures[fut]
+                # re-raise any exceptions from child
+                fut.result()
+        except KeyboardInterrupt:
+            console.print(
+                "[yellow]Interrupted by user, shutting down executor…[/yellow]"
+            )
+            exe.shutdown(cancel_futures=True)
+            sys.exit(1)
+        finally:
+            exe.shutdown(wait=False, cancel_futures=True)
+    else:
+        try:
+            for viz in viz_list:
+                render_viz(viz, save_dir, button_image_path)
+        except KeyboardInterrupt:
+            console.print("[yellow]Interrupted by user[/yellow]")
+            sys.exit(1)
 
 
 if __name__ == "__main__":
