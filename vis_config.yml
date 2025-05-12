@@ -20,7 +20,7 @@ visualizations:
 
     # 3. recording settings
     recording:
-      fast: true # override via CLI flag if you like
+      fast: false # override via CLI flag if you like
       alpha: true # If alpha is enabled, the background will be transparent
 
   - name: "10_percent"
@@ -38,7 +38,7 @@ visualizations:
 
     # 3. recording settings
     recording:
-      fast: true # override via CLI flag if you like
+      fast: false # override via CLI flag if you like
       alpha: true # If alpha is enabled, the background will be transparent
 
   - name: "20_percent"
@@ -56,7 +56,7 @@ visualizations:
 
     # 3. recording settings
     recording:
-      fast: true # override via CLI flag if you like
+      fast: false # override via CLI flag if you like
       alpha: true # If alpha is enabled, the background will be transparent
 
   - name: "30_percent"
@@ -74,7 +74,7 @@ visualizations:
 
     # 3. recording settings
     recording:
-      fast: true # override via CLI flag if you like
+      fast: false # override via CLI flag if you like
       alpha: true # If alpha is enabled, the background will be transparent
 
   - name: "40_percent"
@@ -92,7 +92,7 @@ visualizations:
 
     # 3. recording settings
     recording:
-      fast: true # override via CLI flag if you like
+      fast: false # override via CLI flag if you like
       alpha: true # If alpha is enabled, the background will be transparent
 
   - name: "50_percent"
@@ -110,7 +110,7 @@ visualizations:
 
     # 3. recording settings
     recording:
-      fast: true # override via CLI flag if you like
+      fast: false # override via CLI flag if you like
       alpha: true # If alpha is enabled, the background will be transparent
 
   - name: "60_percent"
@@ -128,7 +128,7 @@ visualizations:
 
     # 3. recording settings
     recording:
-      fast: true # override via CLI flag if you like
+      fast: false # override via CLI flag if you like
       alpha: true # If alpha is enabled, the background will be transparent
 
   - name: "70_percent"
@@ -146,7 +146,7 @@ visualizations:
 
     # 3. recording settings
     recording:
-      fast: true # override via CLI flag if you like
+      fast: false # override via CLI flag if you like
       alpha: true # If alpha is enabled, the background will be transparent
 
   - name: "80_percent"
@@ -164,7 +164,7 @@ visualizations:
 
     # 3. recording settings
     recording:
-      fast: true # override via CLI flag if you like
+      fast: false # override via CLI flag if you like
       alpha: true # If alpha is enabled, the background will be transparent
 
   - name: "90_percent"
@@ -182,7 +182,7 @@ visualizations:
 
     # 3. recording settings
     recording:
-      fast: true # override via CLI flag if you like
+      fast: false # override via CLI flag if you like
       alpha: true # If alpha is enabled, the background will be transparent
 
   - name: "100_percent"
@@ -200,7 +200,7 @@ visualizations:
 
     # 3. recording settings
     recording:
-      fast: true # override via CLI flag if you like
+      fast: false # override via CLI flag if you like
       alpha: true # If alpha is enabled, the background will be transparent
 
   - name: "100_percent_no_noise"
@@ -218,7 +218,7 @@ visualizations:
 
     # 3. recording settings
     recording:
-      fast: true # override via CLI flag if you like
+      fast: false # override via CLI flag if you like
       alpha: true # If alpha is enabled, the background will be transparent
 
   - name: "all_transitions"
@@ -236,7 +236,7 @@ visualizations:
 
     # 3. recording settings
     recording:
-      fast: true # override via CLI flag if you like
+      fast: false # override via CLI flag if you like
       alpha: true # If alpha is enabled, the background will be transparent
 
   - name: "no_actions_swingup"
@@ -255,7 +255,7 @@ visualizations:
 
     # 3. recording settings
     recording:
-      fast: true # override via CLI flag if you like
+      fast: false # override via CLI flag if you like
       alpha: true # If alpha is enabled, the background will be transparent
 
   - name: "trained_swingup"
@@ -274,6 +274,6 @@ visualizations:
 
     # 3. recording settings
     recording:
-      fast: true # override via CLI flag if you like
+      fast: false # override via CLI flag if you like
       alpha: true # If alpha is enabled, the background will be transparent
 
