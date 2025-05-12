@@ -155,6 +155,7 @@ class InvertedDoublePendulumEnv(MujocoEnv, utils.EzPickle):
         render_resolution: tuple = (640, 480),
         healthy_reward: float = 10.0,
         slider_reset_noise: float = 0.05,
+        init_qpos: np.ndarray = None,
         balance_mode: int = None,  # The balance mode to train with
         mode_switch_steps: int = 1000,  # Number of steps before switching modes
         terminate_on_dead: bool = True,  # Terminate the episode if the pendulum is dead
@@ -239,8 +240,15 @@ class InvertedDoublePendulumEnv(MujocoEnv, utils.EzPickle):
         )
 
         # Start both joints at 180 degrees (pi radians)
-        self.init_qpos[1] = np.pi
-        self.init_qpos[2] = np.pi
+        if init_qpos is None:
+            self.random_init = True
+            self.init_qpos[1] = np.pi
+            self.init_qpos[2] = np.pi
+        else:
+            self.random_init = False
+            self.init_qpos[0] = init_qpos[0]
+            self.init_qpos[1] = init_qpos[1]
+            self.init_qpos[2] = init_qpos[2]
 
         self.metadata = {
             "render_modes": ["human", "rgb_array", "depth_array"],
@@ -278,10 +286,12 @@ class InvertedDoublePendulumEnv(MujocoEnv, utils.EzPickle):
         )
 
         reward, reward_info = self._get_rew(
-            pole1_x, pole1_y, pole2_x, pole2_y, terminated
+            pole1_x, pole1_y, pole2_x, pole2_y, terminated, action
         )
 
         info = reward_info
+
+        info["target_mode"] = self.target_mode
 
         if self.render_mode == "human":
             self.render()
@@ -294,7 +304,7 @@ class InvertedDoublePendulumEnv(MujocoEnv, utils.EzPickle):
         # truncation=False as the time limit is handled by the `TimeLimit` wrapper added during `make`
         return observation, reward, terminated, False, info
 
-    def _get_rew(self, pole1_x, pole1_y, pole2_x, pole2_y, terminated):
+    def _get_rew(self, pole1_x, pole1_y, pole2_x, pole2_y, terminated, action):
 
         # Pendulum standing up: [0, 1.12]
 
@@ -321,12 +331,20 @@ class InvertedDoublePendulumEnv(MujocoEnv, utils.EzPickle):
         # Distance from the tip of the second pole to the pendulum standing up position
         dist_penalty = 0.01 * pole2_x**2 + (pole2_y - target_tip_y) ** 2
 
-        reward = alive_bonus - dist_penalty - vel_penalty - pole1_distance_penalty
+        # action_penalty = 0.005 * np.sum(np.square(action))
+
+        reward = (
+            alive_bonus
+            - dist_penalty
+            - vel_penalty
+            - pole1_distance_penalty
+            # - action_penalty
+        )
 
         reward_info = {
             # "reward_survive": alive_bonus,
-            "distance_penalty": -dist_penalty,
-            "velocity_penalty": -vel_penalty,
+            "distance_penalty": -dist_penalty - pole1_distance_penalty,
+            "velocity_penalty": -vel_penalty * 1e-3,
         }
 
         return reward, reward_info
@@ -356,9 +374,6 @@ class InvertedDoublePendulumEnv(MujocoEnv, utils.EzPickle):
 
     def reset_model(self):
 
-        noise_low = -self._slider_reset_noise
-        noise_high = self._slider_reset_noise
-
         self.iterations += 1
 
         self.dead_steps = 0
@@ -371,17 +386,25 @@ class InvertedDoublePendulumEnv(MujocoEnv, utils.EzPickle):
             # Sample a random initial mode
             self.target_mode = self._get_next_mode()
 
-        # Sample dimensions [1,2] from -np.pi to np.pi
-        # dimension 0 should use reset_noise_scale
-
         init_qpos = self.init_qpos.copy()
-        init_qpos[1:3] = self.np_random.uniform(low=-np.pi, high=np.pi, size=2)
+        init_qvel = self.init_qvel.copy()
 
-        init_qpos[0] += self.np_random.uniform(low=noise_low, high=noise_high)
+        if self.random_init:
+            noise_low = -self._slider_reset_noise
+            noise_high = self._slider_reset_noise
 
-        self.set_state(
-            init_qpos,
-            self.init_qvel
-            + self.np_random.standard_normal(self.model.nv) * self._slider_reset_noise,
-        )
+            # Sample dimensions [1,2] from -np.pi to np.pi
+            # dimension 0 should use reset_noise_scale
+            init_qpos[1:3] = self.np_random.uniform(low=-np.pi, high=np.pi, size=2)
+
+            init_qpos[0] += self.np_random.uniform(low=noise_low, high=noise_high)
+
+            init_qvel += (
+                self.np_random.uniform(
+                    low=noise_low, high=noise_high, size=self.model.nv
+                )
+                * self._slider_reset_noise
+            )
+
+        self.set_state(init_qpos, init_qvel)
         return self._get_obs()
