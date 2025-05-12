@@ -178,3 +178,10 @@ pyrightconfig.json
 # RL stuff
 runs/
 wandb/
+
+
+# Project specific
+assets/
+models/
+video1_data/
+logs/
