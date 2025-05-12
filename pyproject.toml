@@ -25,4 +25,5 @@ dependencies = [
     "wandb>=0.19.7",
     "ml_collections",
     "mediapy>=1.2.2",
+    "rich>=13.9.4",
 ]
