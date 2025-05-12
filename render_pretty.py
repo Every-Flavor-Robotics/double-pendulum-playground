@@ -138,7 +138,7 @@ def render_viz(visualization, save_dir, button_image_path):
         },
     )
 
-    if visualization["recording"]["fast"]:
+    if not visualization["recording"]["fast"]:
 
         frame_skip = vec_env.envs[0].unwrapped.frame_skip
 
@@ -256,6 +256,15 @@ def render_viz(visualization, save_dir, button_image_path):
     )
     ffmpeg_proc_right_button = subprocess.Popen(
         ffmpeg_cmd_right_button, stdin=subprocess.PIPE
+    )
+
+    # Print the details of the visualization, tabbed in 1
+    console.print(
+        f"[green]Ouptut path: [bold]{vis_dir}[/bold][/green]\n"
+        f"[green]FPS: [bold]{fps}[/bold][/green]\n"
+        f"[green]Resolution: [bold]{resolution}[/bold][/green]\n"
+        f"[green]Alpha: [bold]{transparent}[/bold][/green]\n"
+        f"[green]Model: [bold]{model_path}[/bold][/green]\n"
     )
 
     # (Optional) If you also want a live display:
