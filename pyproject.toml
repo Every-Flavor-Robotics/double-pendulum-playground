@@ -26,4 +26,6 @@ dependencies = [
     "ml_collections",
     "mediapy>=1.2.2",
     "rich>=13.9.4",
+    "gymnax>=0.0.8",
+    "distrax>=0.1.5",
 ]
