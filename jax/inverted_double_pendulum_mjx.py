@@ -4,17 +4,18 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
-import jax
-import jax.numpy as jnp
 import mujoco
 import numpy as np
 from gymnasium import utils
 from gymnasium.envs.mujoco import MujocoEnv
 from gymnasium.spaces import Box
-from jax import lax
 from ml_collections import config_dict
 from mujoco import mjx
 from mujoco_playground._src import mjx_env
+
+import jax
+import jax.numpy as jnp
+from jax import lax
 
 DEFAULT_CAMERA_CONFIG = {
     "trackbodyid": 0,
@@ -166,7 +167,7 @@ class InvertedDoublePendulumEnv(mjx_env.MjxEnv):
         self,
         config: config_dict.ConfigDict = default_config(),
         config_overrides: Optional[Dict[str, Union[str, int, list[Any]]]] = None,
-        xml_file: str = "./new_pendulum.xml",
+        xml_file: str = "../new_pendulum.xml",
         frame_skip: int = 5,
         default_camera_config: Dict[str, Union[float, int]] = {},
         healthy_reward: float = 10.0,
@@ -207,7 +208,7 @@ class InvertedDoublePendulumEnv(mjx_env.MjxEnv):
         new_high = np.append(observation_space.high, np.ones(self.NUM_MODES))
         new_low = np.append(observation_space.low, np.zeros(self.NUM_MODES))
 
-        observation_space = Box(
+        self.observation_space = Box(
             low=new_low, high=new_high, shape=new_shape, dtype=np.float64
         )
 
@@ -242,6 +243,14 @@ class InvertedDoublePendulumEnv(mjx_env.MjxEnv):
         self._mj_model.opt.timestep = self.sim_dt
         self._mjx_model = mjx.put_model(self._mj_model)
         self._post_init()
+
+        # TODO: Don't set this here, figure out why it's not already set
+        self.action_space = Box(
+            low=-1.0,
+            high=1.0,
+            shape=(self._mjx_model.nu,),
+            dtype=np.float64,
+        )
 
     def _post_init(self) -> None:
         # self._pole_body_id = self.mj_model.body("pole").id
@@ -309,7 +318,6 @@ class InvertedDoublePendulumEnv(mjx_env.MjxEnv):
 
         obs = self._get_obs(data, state.info)
 
-        # TODO: Do we need all envs to exit if one is done?
         done = jnp.isnan(data.qpos).any() | jnp.isnan(data.qvel).any()
         done = done.astype(float)
 
