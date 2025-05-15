@@ -5,15 +5,11 @@ import imageio
 from flax.linen.initializers import constant, orthogonal
 from flax.serialization import from_bytes
 from flax.training.train_state import TrainState
+from wrappers import ClipAction, InvertedDoublePendulumGymnaxWrapper
 
 import jax
 import jax.numpy as jnp
-from train import (  # ← assumes you move all your above code to train_script.py
-    ActorCritic,
-    ClipAction,
-    InvertedDoublePendulumGymnaxWrapper,
-    VecEnv,
-)
+from models import ActorCritic
 
 # -------- Reconstruct environment --------
 env = InvertedDoublePendulumGymnaxWrapper()
@@ -76,7 +72,7 @@ def unbatch_states(batched_states):
 
 
 # --- Execute rollout ---
-rng = jax.random.PRNGKey(30)
+rng = jax.random.PRNGKey(42)
 episode_length = 1000
 states, rewards, dones = run_rollout(rng, params, episode_length)
 
