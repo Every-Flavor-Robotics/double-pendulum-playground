@@ -2,9 +2,7 @@ import pathlib
 from functools import partial
 
 import imageio
-from flax.linen.initializers import constant, orthogonal
 from flax.serialization import from_bytes
-from flax.training.train_state import TrainState
 from wrappers import ClipAction, InvertedDoublePendulumGymnaxWrapper
 
 import jax
