@@ -15,9 +15,29 @@ import jax.numpy as jnp
 import wandb
 from models import ActorCritic
 
+config = {
+        "LR": 3e-4,
+        "NUM_ENVS": 2048,
+        "NUM_STEPS": 20,
+        "TOTAL_TIMESTEPS": 1e8,
+        "UPDATE_EPOCHS": 4,
+        "NUM_MINIBATCHES": 32,
+        "GAMMA": 0.99,
+        "GAE_LAMBDA": 0.95,
+        "CLIP_EPS": 0.2,
+        "ENT_COEF": 0.0006,
+        "VF_COEF": 0.5,
+        "MAX_GRAD_NORM": 0.25,
+        "ACTIVATION": "tanh",
+        "ENV_NAME": "hopper",
+        "ANNEAL_LR": True,
+        "NORMALIZE_ENV": False,
+        "LOGGING": True,
+    }
+
 steps_elapsed = 0
 def callback(info):
-    global steps_elapsed
+    global steps_elapsed, config
 
     done = info["returned_episode"]
     returns = info["returned_episode_returns"]
@@ -48,9 +68,9 @@ def callback(info):
         # Log average episode return and length to wandb
         wandb.log(
             {
-                "avg_return": avg_return,
-                "avg_length": avg_length,
-                "steps_elapsed": steps_elapsed,
+                "rollout/ep_rew_mean": avg_return,
+                "rollout/ep_len_mean": avg_length,
+                "global_step": steps_elapsed * config["NUM_ENVS"] * config["NUM_STEPS"],
             }
         )
     else:
@@ -68,7 +88,6 @@ class Transition(NamedTuple):
     obs: jnp.ndarray
     info: jnp.ndarray
 
-
 def make_train(config):
     config["NUM_UPDATES"] = (
         config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"]
@@ -76,6 +95,7 @@ def make_train(config):
     config["MINIBATCH_SIZE"] = (
         config["NUM_ENVS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"]
     )
+
     env, env_params = InvertedDoublePendulumGymnaxWrapper(), None
     env = LogWrapper(env)
     env = ClipAction(env)
@@ -156,6 +176,7 @@ def make_train(config):
                 obsv, env_state, reward, done, info = env.step(
                     rng_step, env_state, action, env_params
                 )
+
                 transition = Transition(
                     done, action, value, reward, log_prob, last_obs, info
                 )
@@ -171,18 +192,23 @@ def make_train(config):
             _, last_val = network.apply(train_state.params, last_obs)
 
             def _calculate_gae(traj_batch, last_val):
+                # Use both terminated and truncated
                 def _get_advantages(gae_and_next_value, transition):
                     gae, next_value = gae_and_next_value
-                    done, value, reward = (
-                        transition.done,
-                        transition.value,
-                        transition.reward,
-                    )
-                    delta = reward + config["GAMMA"] * next_value * (1 - done) - value
-                    gae = (
-                        delta
-                        + config["GAMMA"] * config["GAE_LAMBDA"] * (1 - done) * gae
-                    )
+                    terminated = transition.info["termination"]
+                    # done = transition.done
+
+                    value = transition.value
+                    reward = transition.reward
+
+                    # This is a subtle distinction:
+                    # If not done, bootstrap (next_value)
+                    # If episode is truncated, bootstrap (next_value)
+                    # If episode is terminated, use 0 as the next value
+                    not_final = 1.0 - terminated  # 0 if terminated, 1 otherwise
+
+                    delta = reward + config["GAMMA"] * next_value * not_final - value
+                    gae = delta + config["GAMMA"] * config["GAE_LAMBDA"] * not_final * gae
                     return (gae, value), gae
 
                 _, advantages = jax.lax.scan(
@@ -260,6 +286,7 @@ def make_train(config):
                 shuffled_batch = jax.tree_util.tree_map(
                     lambda x: jnp.take(x, permutation, axis=0), batch
                 )
+
                 minibatches = jax.tree_util.tree_map(
                     lambda x: jnp.reshape(
                         x, [config["NUM_MINIBATCHES"], -1] + list(x.shape[1:])
@@ -299,26 +326,8 @@ def make_train(config):
 
 
 def main():
+    global config
 
-    config = {
-        "LR": 3e-4,
-        "NUM_ENVS": 2048,
-        "NUM_STEPS": 20,
-        "TOTAL_TIMESTEPS": 1e8,
-        "UPDATE_EPOCHS": 4,
-        "NUM_MINIBATCHES": 32,
-        "GAMMA": 0.99,
-        "GAE_LAMBDA": 0.95,
-        "CLIP_EPS": 0.2,
-        "ENT_COEF": 0.0006,
-        "VF_COEF": 0.5,
-        "MAX_GRAD_NORM": 0.25,
-        "ACTIVATION": "tanh",
-        "ENV_NAME": "hopper",
-        "ANNEAL_LR": True,
-        "NORMALIZE_ENV": False,
-        "LOGGING": True,
-    }
 
     if config["LOGGING"]:
         wandb.login()
@@ -332,6 +341,11 @@ def main():
             monitor_gym=True,  # auto-upload the videos of agents playing the game
             save_code=True,  # optiona
         )
+
+        # Log all hyperparameters
+        wandb.config.update(config)
+        wandb.run.save()
+        print("Wandb run started")
 
 
 

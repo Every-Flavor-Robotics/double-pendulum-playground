@@ -306,6 +306,13 @@ class InvertedDoublePendulumEnv(mjx_env.MjxEnv):
             # Sample a random initial mode
             info = self._get_next_mode(info)
 
+        info["termination"] = 0.0
+
+        info["returned_episode_returns"] = 0.0
+        info["returned_episode_lengths"] = 0
+        info["returned_episode"] = False
+        info["timestep"] = 0
+
         reward, done = jnp.zeros(2)  # pylint: disable=redefined-outer-name
         obs = self._get_obs(data, info)
         return mjx_env.State(data, obs, reward, done, metrics, info)
@@ -321,10 +328,21 @@ class InvertedDoublePendulumEnv(mjx_env.MjxEnv):
         done = jnp.isnan(data.qpos).any() | jnp.isnan(data.qvel).any()
         done = done.astype(float)
 
+        # info = {
+        #     "reward_survive": state.metrics.get("reward_survive", 0.0),
+        #     "distance_penalty": state.metrics.get("distance_penalty", 0.0),
+        #     "velocity_penalty": state.metrics.get("velocity_penalty", 0.0),
+        #     "target_mode": state.info["target_mode"],
+        #     "termination": done,
+        # }
+        info = dict(state.info)
+
         # Switch mode if not training with a fixed mode and mode switch steps reached
         if self.balance_mode is None and self.steps % self.mode_switch_steps == 0:
             # Sample new mode
             info = self._get_next_mode(state.info)
+
+        info["termination"] = done
 
         return mjx_env.State(data, obs, reward, done, state.metrics, info)
 
