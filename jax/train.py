@@ -6,17 +6,57 @@ import optax
 from flax.serialization import to_bytes
 from flax.training.train_state import TrainState
 from gymnax.wrappers.purerl import LogWrapper
-from wrappers import (
-    ClipAction,
-    InvertedDoublePendulumGymnaxWrapper,
-    NormalizeVecObservation,
-    NormalizeVecReward,
-    VecEnv,
-)
+from wrappers import (ClipAction, InvertedDoublePendulumGymnaxWrapper,
+                      NormalizeVecObservation, NormalizeVecReward, VecEnv)
 
 import jax
+import jax.experimental
 import jax.numpy as jnp
+import wandb
 from models import ActorCritic
+
+steps_elapsed = 0
+def callback(info):
+    global steps_elapsed
+
+    done = info["returned_episode"]
+    returns = info["returned_episode_returns"]
+    lengths = info["returned_episode_lengths"]
+    timesteps = info["timestep"]
+
+    # Only consider environments where episode ended during this step
+    mask = done.astype(bool)
+
+    if jnp.any(mask):  # Check if there are any "done" environments
+        # Flatten across time and envs
+        episode_returns = returns[mask]
+        episode_timesteps = timesteps[mask]
+
+        total_return = jnp.sum(episode_returns)
+        num_episodes = jnp.sum(mask)
+
+        avg_return = total_return / num_episodes
+        max_step = jnp.max(episode_timesteps)
+
+        episode_lengths = lengths[mask]
+        avg_length = jnp.sum(episode_lengths) / num_episodes
+
+        print(f"Step {steps_elapsed}:")
+        print(f"  Average return: {avg_return}")
+        print(f"  Average length: {avg_length}")
+
+        # Log average episode return and length to wandb
+        wandb.log(
+            {
+                "avg_return": avg_return,
+                "avg_length": avg_length,
+                "steps_elapsed": steps_elapsed,
+            }
+        )
+    else:
+        print(f"No episodes completed during this step: {steps_elapsed}")
+
+    steps_elapsed += 1
 
 
 class Transition(NamedTuple):
@@ -239,59 +279,32 @@ def make_train(config):
             train_state = update_state[0]
             metric = traj_batch.info
             rng = update_state[-1]
-            if config.get("DEBUG"):
+            if config.get("LOGGING", False):
 
-                def callback(info):
-                    done = info["returned_episode"]
-                    returns = info["returned_episode_returns"]
-                    lengths = info["returned_episode_lengths"]
-                    timesteps = info["timestep"]
-
-                    # Only consider environments where episode ended during this step
-                    mask = done.astype(bool)
-
-                    if jnp.any(mask):  # Check if there are any "done" environments
-                        # Flatten across time and envs
-                        episode_returns = returns[mask]
-                        episode_timesteps = timesteps[mask]
-
-                        total_return = jnp.sum(episode_returns)
-                        num_episodes = jnp.sum(mask)
-
-                        avg_return = total_return / num_episodes
-                        max_step = jnp.max(episode_timesteps)
-
-                        episode_lengths = lengths[mask]
-                        avg_length = jnp.sum(episode_lengths) / num_episodes
-
-                        print(
-                            f"step={int(max_step)}, avg_ep_length={int(avg_length)}, "
-                            f"avg_return={float(avg_return):.2f}"
-                        )
-                    else:
-                        print("No episodes completed during this step.")
-
-                jax.debug.callback(callback, metric)
+                jax.experimental.io_callback(callback, None, metric)
 
             runner_state = (train_state, env_state, last_obs, rng)
             return runner_state, metric
 
         rng, _rng = jax.random.split(rng)
         runner_state = (train_state, env_state, obsv, _rng)
+
         runner_state, metric = jax.lax.scan(
             _update_step, runner_state, None, config["NUM_UPDATES"]
         )
+
         return {"runner_state": runner_state, "metrics": metric}
 
     return train
 
 
-if __name__ == "__main__":
+def main():
+
     config = {
-        "LR": 5e-5,
+        "LR": 3e-4,
         "NUM_ENVS": 2048,
         "NUM_STEPS": 20,
-        "TOTAL_TIMESTEPS": 2e8,
+        "TOTAL_TIMESTEPS": 1e8,
         "UPDATE_EPOCHS": 4,
         "NUM_MINIBATCHES": 32,
         "GAMMA": 0.99,
@@ -304,15 +317,37 @@ if __name__ == "__main__":
         "ENV_NAME": "hopper",
         "ANNEAL_LR": True,
         "NORMALIZE_ENV": False,
-        "DEBUG": True,
+        "LOGGING": True,
     }
+
+    if config["LOGGING"]:
+        wandb.login()
+
+        run = wandb.init(
+            # Set the project where this run will be logged
+            project="double-pendulum",
+            # Track hyperparameters and run metadata
+            config={},
+            sync_tensorboard=True,  # auto-upload sb3's tensorboard metrics
+            monitor_gym=True,  # auto-upload the videos of agents playing the game
+            save_code=True,  # optiona
+        )
+
+
+
 
     # Measure total training time
 
-    start_time = time.time()
     rng = jax.random.PRNGKey(30)
+
     train_jit = jax.jit(make_train(config))
+    start_time = time.time()
+
     out = train_jit(rng)
+
+    # Wait for all JAX computations to finish
+    jax.block_until_ready(out)
+
 
     print("Total training time: ", time.time() - start_time)
 
@@ -328,3 +363,13 @@ if __name__ == "__main__":
     save_path = pathlib.Path("final_policy.msgpack")
     with save_path.open("wb") as f:
         f.write(to_bytes(params))
+
+    if config["LOGGING"]:
+        wandb.save(str(save_path), base_path=".", policy="now")
+        wandb.finish()
+        print("Wandb run finished")
+    print("Final policy saved to: ", save_path)
+
+
+if __name__ == "__main__":
+    main()
