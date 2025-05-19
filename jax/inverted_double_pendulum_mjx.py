@@ -312,6 +312,7 @@ class InvertedDoublePendulumEnv(mjx_env.MjxEnv):
         info["returned_episode_lengths"] = 0
         info["returned_episode"] = False
         info["timestep"] = 0
+        info["dead_steps"] = 0
 
         reward, done = jnp.zeros(2)  # pylint: disable=redefined-outer-name
         obs = self._get_obs(data, info)
@@ -321,11 +322,26 @@ class InvertedDoublePendulumEnv(mjx_env.MjxEnv):
 
         data = mjx_env.step(self.mjx_model, state.data, action, self.n_substeps)
 
-        reward = self._get_reward(data, action, state.info, state.metrics)
-
         obs = self._get_obs(data, state.info)
 
+        def is_dead(target_mode, pole2_y):
+            # Returns boolean for "dead" according to mode
+            return lax.switch(
+                target_mode,
+                [
+                    lambda y: y <= 1,  # mode 0
+                    lambda y: (y <= -0.15) | (y >= 0.15),  # mode 1
+                    lambda y: (y <= -0.15) | (y >= 0.15),  # mode 2
+                    lambda y: y >= -1,  # mode 3
+                ],
+                pole2_y,
+            )
+
+        dead_this_step = is_dead(state.info["target_mode"], data.site_xpos[1][2])
+        dead_steps = state.info["dead_steps"] + dead_this_step.astype(int)
+
         done = jnp.isnan(data.qpos).any() | jnp.isnan(data.qvel).any()
+        done = done | (dead_steps >= self.dead_steps_termination)
         done = done.astype(float)
 
         # info = {
@@ -343,6 +359,9 @@ class InvertedDoublePendulumEnv(mjx_env.MjxEnv):
             info = self._get_next_mode(state.info)
 
         info["termination"] = done
+        info["dead_steps"] = dead_steps
+
+        reward = self._get_reward(data, action, state.info, state.metrics)
 
         return mjx_env.State(data, obs, reward, done, state.metrics, info)
 
@@ -367,7 +386,7 @@ class InvertedDoublePendulumEnv(mjx_env.MjxEnv):
 
         # Compute alive bonus: terminated is a boolean array, so 1 if not terminated, else 0.
         # (We subtract the boolean converted to int.)
-        alive_bonus = self._healthy_reward
+        alive_bonus = self._healthy_reward * (1 - info["termination"])
 
         target_mode = info["target_mode"]
 
