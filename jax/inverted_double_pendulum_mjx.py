@@ -233,7 +233,7 @@ class InvertedDoublePendulumEnv(mjx_env.MjxEnv):
         self.balance_mode = balance_mode
         self.mode_switch_steps = mode_switch_steps
 
-        self.switch_order = switch_order
+        self.switch_order = jnp.array(switch_order)
         self.switch_index = None if switch_order is None else -1
 
         self.rng_key = jax.random.key(np.random.randint(0, 2**32))
@@ -268,8 +268,10 @@ class InvertedDoublePendulumEnv(mjx_env.MjxEnv):
             target_mode = jax.random.randint(rng, (), 0, self.NUM_MODES)
         else:
             switch_index += 1
-            if switch_index >= len(self.switch_order):
-                self.switch_index = 0
+            switch_index = jnp.where(
+                switch_index >= len(self.switch_order), 0, switch_index
+            )
+            target_mode = self.switch_order[switch_index]
 
         info["switch_index"] = switch_index
         info["target_mode"] = target_mode
@@ -319,7 +321,6 @@ class InvertedDoublePendulumEnv(mjx_env.MjxEnv):
         return mjx_env.State(data, obs, reward, done, metrics, info)
 
     def step(self, state: mjx_env.State, action: jax.Array) -> mjx_env.State:
-
         data = mjx_env.step(self.mjx_model, state.data, action, self.n_substeps)
 
         obs = self._get_obs(data, state.info)
@@ -372,7 +373,6 @@ class InvertedDoublePendulumEnv(mjx_env.MjxEnv):
         info: dict[str, Any],
         metrics: dict[str, Any],
     ) -> jax.Array:
-
         # Assuming self.data.qvel is now a batched array with shape (n_envs, nv)
         qvel = data.qvel
         # Extract the relevant velocity components for each environment
@@ -424,7 +424,6 @@ class InvertedDoublePendulumEnv(mjx_env.MjxEnv):
         return reward
 
     def _get_obs(self, data, info):
-
         target_mode_one_hot = jnp.eye(self.NUM_MODES)[info["target_mode"]]
         # Squeeze (1, 4) to (4,)
         target_mode_one_hot = jnp.squeeze(target_mode_one_hot)
