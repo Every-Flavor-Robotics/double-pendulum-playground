@@ -9,8 +9,10 @@ import jax.numpy as jnp
 
 
 class InvertedDoublePendulumGymnaxWrapper:
-    def __init__(self):
-        env = InvertedDoublePendulumEnv()
+    def __init__(self, mode_switch_steps=1000, switch_order=None):
+        env = InvertedDoublePendulumEnv(
+            mode_switch_steps=mode_switch_steps, switch_order=switch_order
+        )
         env = wrapper.wrap_for_brax_training(
             env,
             vision=False,
@@ -169,7 +171,6 @@ class NormalizeVecRewEnvState:
 
 
 class NormalizeVecReward(GymnaxWrapper):
-
     def __init__(self, env, gamma):
         super().__init__(env)
         self.gamma = gamma
@@ -213,5 +214,4 @@ class NormalizeVecReward(GymnaxWrapper):
             return_val=return_val,
             env_state=env_state,
         )
-        return obs, state, reward / jnp.sqrt(state.var + 1e-8), done, info
         return obs, state, reward / jnp.sqrt(state.var + 1e-8), done, info
