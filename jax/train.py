@@ -6,8 +6,13 @@ import optax
 from flax.serialization import to_bytes
 from flax.training.train_state import TrainState
 from gymnax.wrappers.purerl import LogWrapper
-from wrappers import (ClipAction, InvertedDoublePendulumGymnaxWrapper,
-                      NormalizeVecObservation, NormalizeVecReward, VecEnv)
+from wrappers import (
+    ClipAction,
+    InvertedDoublePendulumGymnaxWrapper,
+    NormalizeVecObservation,
+    NormalizeVecReward,
+    VecEnv,
+)
 
 import jax
 import jax.experimental
@@ -16,47 +21,45 @@ import wandb
 from models import ActorCritic
 
 config = {
-        "LR": 3e-4,
-        "NUM_ENVS": 2048,
-        "NUM_STEPS": 20,
-        "TOTAL_TIMESTEPS": 1e8,
-        "UPDATE_EPOCHS": 4,
-        "NUM_MINIBATCHES": 32,
-        "GAMMA": 0.99,
-        "GAE_LAMBDA": 0.95,
-        "CLIP_EPS": 0.2,
-        "ENT_COEF": 0.0006,
-        "VF_COEF": 0.5,
-        "MAX_GRAD_NORM": 0.25,
-        "ACTIVATION": "tanh",
-        "ENV_NAME": "hopper",
-        "ANNEAL_LR": True,
-        "NORMALIZE_ENV": False,
-        "LOGGING": True,
-    }
+    "LR": 3e-4,
+    "NUM_ENVS": 4096,
+    "NUM_STEPS": 10,
+    "TOTAL_TIMESTEPS": 2e8,
+    "UPDATE_EPOCHS": 4,
+    "NUM_MINIBATCHES": 32,
+    "GAMMA": 0.99,
+    "GAE_LAMBDA": 0.95,
+    "CLIP_EPS": 0.2,
+    "ENT_COEF": 0.0006,
+    "VF_COEF": 0.5,
+    "MAX_GRAD_NORM": 0.25,
+    "ACTIVATION": "tanh",
+    "ENV_NAME": "hopper",
+    "ANNEAL_LR": False,
+    "NORMALIZE_ENV": True,
+    "LOGGING": True,
+}
 
 steps_elapsed = 0
+
+
 def callback(info):
     global steps_elapsed, config
 
     done = info["returned_episode"]
     returns = info["returned_episode_returns"]
     lengths = info["returned_episode_lengths"]
-    timesteps = info["timestep"]
-
     # Only consider environments where episode ended during this step
     mask = done.astype(bool)
 
     if jnp.any(mask):  # Check if there are any "done" environments
         # Flatten across time and envs
         episode_returns = returns[mask]
-        episode_timesteps = timesteps[mask]
 
         total_return = jnp.sum(episode_returns)
         num_episodes = jnp.sum(mask)
 
         avg_return = total_return / num_episodes
-        max_step = jnp.max(episode_timesteps)
 
         episode_lengths = lengths[mask]
         avg_length = jnp.sum(episode_lengths) / num_episodes
@@ -88,6 +91,7 @@ class Transition(NamedTuple):
     obs: jnp.ndarray
     info: jnp.ndarray
 
+
 def make_train(config):
     config["NUM_UPDATES"] = (
         config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"]
@@ -118,10 +122,11 @@ def make_train(config):
         )
         step_frac = count / total_steps
 
-        x = (step_frac - 0.3) / 0.7
+        x = (step_frac - 0.2) / 0.8
         x = jnp.clip(x, 0.0, 1.0)
 
         lr_start = 3e-4
+        # lr_end = 8e-5
         lr_end = 8e-5
 
         lr = jnp.exp(x * jnp.log(lr_end) + (1 - x) * jnp.log(lr_start))
@@ -177,9 +182,19 @@ def make_train(config):
                     rng_step, env_state, action, env_params
                 )
 
+                info_filtered = {"termination": info["termination"]}
+                info_filtered["returned_episode"] = info["returned_episode"]
+                info_filtered["returned_episode_returns"] = info[
+                    "returned_episode_returns"
+                ]
+                info_filtered["returned_episode_lengths"] = info[
+                    "returned_episode_lengths"
+                ]
+
                 transition = Transition(
-                    done, action, value, reward, log_prob, last_obs, info
+                    done, action, value, reward, log_prob, last_obs, info_filtered
                 )
+
                 runner_state = (train_state, env_state, obsv, rng)
                 return runner_state, transition
 
@@ -208,7 +223,9 @@ def make_train(config):
                     not_final = 1.0 - terminated  # 0 if terminated, 1 otherwise
 
                     delta = reward + config["GAMMA"] * next_value * not_final - value
-                    gae = delta + config["GAMMA"] * config["GAE_LAMBDA"] * not_final * gae
+                    gae = (
+                        delta + config["GAMMA"] * config["GAE_LAMBDA"] * not_final * gae
+                    )
                     return (gae, value), gae
 
                 _, advantages = jax.lax.scan(
@@ -316,18 +333,17 @@ def make_train(config):
         rng, _rng = jax.random.split(rng)
         runner_state = (train_state, env_state, obsv, _rng)
 
-        runner_state, metric = jax.lax.scan(
+        runner_state, _ = jax.lax.scan(
             _update_step, runner_state, None, config["NUM_UPDATES"]
         )
 
-        return {"runner_state": runner_state, "metrics": metric}
+        return {"runner_state": runner_state, "metrics": None}
 
     return train
 
 
 def main():
     global config
-
 
     if config["LOGGING"]:
         wandb.login()
@@ -347,12 +363,9 @@ def main():
         wandb.run.save()
         print("Wandb run started")
 
-
-
-
     # Measure total training time
 
-    rng = jax.random.PRNGKey(30)
+    rng = jax.random.PRNGKey(1487823)
 
     train_jit = jax.jit(make_train(config))
     start_time = time.time()
@@ -361,7 +374,6 @@ def main():
 
     # Wait for all JAX computations to finish
     jax.block_until_ready(out)
-
 
     print("Total training time: ", time.time() - start_time)
 
