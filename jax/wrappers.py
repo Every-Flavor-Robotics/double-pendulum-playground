@@ -32,6 +32,8 @@ class InvertedDoublePendulumGymnaxWrapper:
         return state.obs, state
 
     def step(self, key, state, action, params=None):
+        # Update info with new rng key
+        state.info["rng"] = key
         next_state = self._env.step(state, action)
         return (
             next_state.obs,
@@ -40,6 +42,7 @@ class InvertedDoublePendulumGymnaxWrapper:
             next_state.done > 0.5,
             {
                 "dead_steps": next_state.info["dead_steps"],
+                "mode_switch_steps": next_state.info["mode_switch_steps"],
                 "termination": next_state.done > 0.5,
             },
         )
