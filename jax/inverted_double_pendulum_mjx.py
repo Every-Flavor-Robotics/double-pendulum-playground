@@ -233,8 +233,16 @@ class InvertedDoublePendulumEnv(mjx_env.MjxEnv):
         self.balance_mode = balance_mode
         self.mode_switch_steps = mode_switch_steps
 
-        self.switch_order = jnp.array(switch_order)
+        if switch_order is not None:
+            self.switch_order = jnp.array(switch_order)
+        else:
+            self.switch_order = None
         self.switch_index = None if switch_order is None else -1
+
+        if switch_order is None:
+            self._get_next_mode = self._get_next_mode_random
+        else:
+            self._get_next_mode = self._get_next_mode_fixed
 
         self.rng_key = jax.random.key(np.random.randint(0, 2**32))
 
@@ -243,6 +251,11 @@ class InvertedDoublePendulumEnv(mjx_env.MjxEnv):
         self._mj_model.opt.timestep = self.sim_dt
         self._mjx_model = mjx.put_model(self._mj_model)
         self._post_init()
+
+        # Print out configured body masses for verification
+        for mass in self._mj_model.body_mass:
+            # Decode name if it's bytes
+            print(f"Body 'unknown' mass = {mass:.6f} kg")
 
         # TODO: Don't set this here, figure out why it's not already set
         self.action_space = Box(
@@ -261,17 +274,29 @@ class InvertedDoublePendulumEnv(mjx_env.MjxEnv):
         # Do nothing for now
         pass
 
-    def _get_next_mode(self, info: dict) -> int:
+    def _get_next_mode_random(self, info: dict) -> int:
+        rng = info["rng"]
+        # Split the rng key
+        rng, rng1 = jax.random.split(rng)
+
+        switch_index = info["switch_index"]
+        target_mode = jax.random.randint(rng1, (), 0, self.NUM_MODES)
+
+        info["switch_index"] = switch_index
+        info["target_mode"] = target_mode
+        info["rng"] = rng
+
+        return info
+
+    def _get_next_mode_fixed(self, info: dict) -> int:
         rng = info["rng"]
         switch_index = info["switch_index"]
-        if self.switch_order is None:
-            target_mode = jax.random.randint(rng, (), 0, self.NUM_MODES)
-        else:
-            switch_index += 1
-            switch_index = jnp.where(
-                switch_index >= len(self.switch_order), 0, switch_index
-            )
-            target_mode = self.switch_order[switch_index]
+        target_mode = self.switch_order[switch_index]
+
+        switch_index += 1
+        switch_index = jnp.where(
+            switch_index >= len(self.switch_order), 0, switch_index
+        )
 
         info["switch_index"] = switch_index
         info["target_mode"] = target_mode
@@ -280,21 +305,32 @@ class InvertedDoublePendulumEnv(mjx_env.MjxEnv):
         return info
 
     def reset(self, rng: jax.Array) -> mjx_env.State:
-        rng, rng1 = jax.random.split(rng)
+        rng, r1, r2, r3, r4, r5, r6 = jax.random.split(rng, 7)
 
         qpos = jnp.zeros(self.mjx_model.nq)
         # Set the cart position
         qpos = qpos.at[0].set(
-            jax.random.uniform(rng1) * self._slider_reset_noise * 2
+            jax.random.uniform(r1) * self._slider_reset_noise * 2
             - self._slider_reset_noise
         )
-        qpos = qpos.at[1].set(jax.random.uniform(rng1) * 2 * jnp.pi)
-        qpos = qpos.at[2].set(jax.random.uniform(rng1) * 2 * jnp.pi)
+        qpos = qpos.at[1].set(jax.random.uniform(r2) * 2 * jnp.pi)
+        qpos = qpos.at[2].set(jax.random.uniform(r3) * 2 * jnp.pi)
 
         qvel = jnp.zeros(self.mjx_model.nv)
-        qvel = qvel.at[0].set(jax.random.normal(rng1) * self._slider_reset_noise)
-        qvel = qvel.at[1].set(jax.random.normal(rng1) * self._slider_reset_noise)
-        qvel = qvel.at[2].set(jax.random.normal(rng1) * self._slider_reset_noise)
+        qvel = qvel.at[0].set(jax.random.normal(r4) * self._slider_reset_noise)
+        qvel = qvel.at[1].set(jax.random.normal(r5) * self._slider_reset_noise)
+        qvel = qvel.at[2].set(jax.random.normal(r6) * self._slider_reset_noise)
+
+        qvel = qvel.at[1].set(jax.random.normal(r5) * self._slider_reset_noise)
+        qvel = qvel.at[2].set(jax.random.normal(r6) * self._slider_reset_noise)
+
+        ### HARDCODED
+        # qpos = qpos.at[0].set(0)
+        # qpos = qpos.at[1].set(3.14)
+        # qpos = qpos.at[2].set(1.57)
+
+        # qvel = jnp.zeros(self.mjx_model.nv)
+        # qvel = qvel.at[0].set(0)
 
         data = mjx_env.init(self.mjx_model, qpos=qpos, qvel=qvel)
 
@@ -308,13 +344,14 @@ class InvertedDoublePendulumEnv(mjx_env.MjxEnv):
             # Sample a random initial mode
             info = self._get_next_mode(info)
 
+        info["rng"] = rng
         info["termination"] = 0.0
-
         info["returned_episode_returns"] = 0.0
         info["returned_episode_lengths"] = 0
         info["returned_episode"] = False
         info["timestep"] = 0
         info["dead_steps"] = 0
+        info["mode_switch_steps"] = 0
 
         reward, done = jnp.zeros(2)  # pylint: disable=redefined-outer-name
         obs = self._get_obs(data, info)
@@ -330,10 +367,10 @@ class InvertedDoublePendulumEnv(mjx_env.MjxEnv):
             return lax.switch(
                 target_mode,
                 [
-                    lambda y: y <= 1,  # mode 0
+                    lambda y: y <= 0.8,  # mode 0
                     lambda y: (y <= -0.15) | (y >= 0.15),  # mode 1
                     lambda y: (y <= -0.15) | (y >= 0.15),  # mode 2
-                    lambda y: y >= -1,  # mode 3
+                    lambda y: y >= -0.8,  # mode 3
                 ],
                 pole2_y,
             )
@@ -354,13 +391,18 @@ class InvertedDoublePendulumEnv(mjx_env.MjxEnv):
         # }
         info = dict(state.info)
 
-        # Switch mode if not training with a fixed mode and mode switch steps reached
-        if self.balance_mode is None and self.steps % self.mode_switch_steps == 0:
-            # Sample new mode
-            info = self._get_next_mode(state.info)
+        def switch_mode_fn(info):
+            return self._get_next_mode(info)
+
+        def no_switch_fn(info):
+            return info
+
+        should_switch = (state.info["mode_switch_steps"] % self.mode_switch_steps) == 0
+        info = lax.cond(should_switch, switch_mode_fn, no_switch_fn, info)
 
         info["termination"] = done
         info["dead_steps"] = dead_steps
+        info["mode_switch_steps"] = state.info["mode_switch_steps"] + 1
 
         reward = self._get_reward(data, action, state.info, state.metrics)
 
@@ -393,7 +435,7 @@ class InvertedDoublePendulumEnv(mjx_env.MjxEnv):
         # Define branch functions for each target mode.
         def mode0(_):
             # target_mode == 0: No additional penalty on pole1.
-            return 2.0, 0.0
+            return 1.6, 0.0
 
         def mode1(_):
             # target_mode == 1: target_tip_y = 0.6 and add penalty encouraging pole1_y to be near -1.2.
@@ -409,7 +451,7 @@ class InvertedDoublePendulumEnv(mjx_env.MjxEnv):
 
         def mode3(_):
             # target_mode == 3: target_tip_y = -2 with no additional pole1 penalty.
-            return -2.0, 0.0
+            return -1.6, 0.0
 
         # Use lax.switch to select the appropriate branch.
         target_tip_y, pole1_distance_penalty = lax.switch(

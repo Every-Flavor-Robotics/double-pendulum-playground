@@ -1,0 +1,70 @@
+<mujoco model="cartpole">
+    <!-- Compile and physics options -->
+    <compiler coordinate="local" inertiafromgeom="true" />
+    <option gravity="1e-5 0 -9.81" integrator="RK4" timestep="0.01" />
+    <size nstack="3000" />
+
+    <!-- Optional: global visualization settings -->
+    <visual>
+        <!-- map: controls the near/far clip planes, plus optional fog -->
+        <!-- quality: control shadow map resolution, etc. -->
+        <quality shadowsize="2048" />
+        <!-- headlight: the default light attached to the camera -->
+        <headlight ambient="0.3 0.3 0.3" diffuse="0.7 0.7 0.7" specular="0.1 0.1 0.1" />
+    </visual>
+
+    <asset>
+        <texture type="skybox" builtin="flat" rgb1="0 1 0" width="32"
+            height="512" />
+    </asset>
+
+    <custom>
+        <numeric data="2" name="frame_skip" />
+    </custom>
+
+    <default>
+        <joint damping="0.05" />
+        <geom contype="0" friction="1 0.1 0.1" rgba="0.7 0.7 0 1" />
+    </default>
+
+    <worldbody>
+
+        <!-- You can optionally add a geom for the sky.
+             A big sphere with 'sky_mat' might look like a horizon if you allow it to fill the background.
+             contype="0" and conaffinity="0" so it doesn't collide with anything.
+        -->
+
+        <geom name="rail" pos="0 0 0" quat="0.707 0 0.707 0" rgba="0.3 0.3 0.7 1" size="0.015 0.5381625"
+            type="capsule"/>
+
+        <!-- True range:  range="-0.5381625 0.5381625"-->
+        <body name="cart" pos="0 0 0">
+            <joint axis="1 0 0" limited="true" margin="0.01" name="slider" pos="0 0 0" range="-0.5381625 0.5381625"
+                type="slide" damping="0.13" frictionloss="1"/>
+            <geom name="cart" pos="0 0 0" quat="0.707 0 0.707 0" size="0.05 0.0875" type="capsule" mass="0.6"/>
+
+            <body name="pole" pos="0 0 0">
+                <joint axis="0 1 0" name="hinge" pos="0 0 0" type="hinge" damping="0.008"/>
+                <geom fromto="0 0 0 0 0 0.492125" name="cpole" rgba="0 0.7 0.7 1" size="0.03 0.2460625"
+                    type="capsule" mass="0.085" />
+
+
+                <site name="pole_tip" pos="0 0 0.492125" size="0.01 0.01" rgba="1 0 0 1" />
+                <body name="pole2" pos="0 0 0.492125">
+                    <joint axis="0 1 0" name="hinge2" pos="0 0 0" type="hinge" damping="0.008"/>
+                    <geom fromto="0 0 0 0 0 0.492125" name="cpole2" rgba="0 0.7 0.7 1" size="0.03 0.2460625"
+                        type="capsule" mass="0.085"/>
+                    <!-- <inertial pos="0 0 0" mass="0.085"/> -->
+                    <!-- <inertial pos="0 0 0" mass="0.1"/> -->
+
+
+                    <site name="pole2_tip" pos="0 0 0.492125" size="0.01 0.01" />
+                </body>
+            </body>
+        </body>
+    </worldbody>
+
+    <actuator>
+        <motor ctrllimited="true" ctrlrange="-1 1" gear="10" joint="slider" name="slide" />
+    </actuator>
+</mujoco>
