@@ -1,9 +1,13 @@
+import pathlib
+import tempfile
+import zipfile
 from typing import Sequence
 
 import distrax
 import flax.linen as nn
 import numpy as np
 from flax.linen.initializers import constant, orthogonal
+from flax.serialization import from_bytes, to_bytes
 
 import jax.numpy as jnp
 
@@ -69,3 +73,66 @@ class ActorCritic(nn.Module):
         )
 
         return pi, jnp.squeeze(critic, axis=-1)
+
+
+def save_model(params, obs_mean, obs_var, save_path):
+    """Saves the model parameters and normalization parameters to temp files, and zips them to save path.
+
+    Args:
+        params : Model parameters.
+        obs_mean : Observation mean.
+        obs_var : Observation variance.
+        save_path : Path to save the model.
+    """
+
+    # Create a temporary directory
+    with tempfile.TemporaryDirectory() as temp_dir:
+        # Save the model parameters
+        model_path = pathlib.Path(temp_dir) / "model.msgpack"
+        with model_path.open("wb") as f:
+            f.write(to_bytes(params))
+
+        # Save the normalization parameters
+        norm_params_path = pathlib.Path(temp_dir) / "norm_params.msgpack"
+        with norm_params_path.open("wb") as f:
+            f.write(to_bytes((obs_mean, obs_var)))
+
+        # Zip the files
+        zip_path = pathlib.Path(save_path)
+        with zipfile.ZipFile(zip_path, "w") as zipf:
+            zipf.write(model_path, arcname="model.msgpack")
+            zipf.write(norm_params_path, arcname="norm_params.msgpack")
+
+    print(f"Model and normalization parameters saved to: {zip_path}")
+
+
+def load_model(zip_path, model, key, env):
+    """Loads the model parameters and normalization parameters from a zip file.
+
+    Args:
+        zip_path : Path to the zip file containing the model and normalization parameters.
+
+    Returns:
+        params : Model parameters.
+        obs_mean : Observation mean.
+        obs_var : Observation variance.
+    """
+
+    obs_dim = env.observation_space(None).shape[0]
+
+    # Put model
+    with zipfile.ZipFile(zip_path, "r") as zipf:
+        with zipf.open("model.msgpack") as f:
+            params_bytes = f.read()
+        with zipf.open("norm_params.msgpack") as f:
+            obs_data = f.read()
+
+    params = from_bytes(
+        model.init(key, jnp.zeros(env.observation_space(None).shape)),
+        params_bytes,
+    )
+
+    empty = (jnp.zeros(obs_dim), jnp.ones(obs_dim))
+    obs_mean, obs_var = from_bytes(empty, obs_data)
+
+    return params, obs_mean, obs_var
