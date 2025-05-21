@@ -1,5 +1,7 @@
 import pathlib
+import tempfile
 import time
+import zipfile
 from typing import NamedTuple
 
 import optax
@@ -18,24 +20,26 @@ import jax
 import jax.experimental
 import jax.numpy as jnp
 import wandb
-from models import ActorCritic
+from models import ActorCritic, save_model
+
+LOG_DIR = pathlib.Path("logs")
 
 config = {
     "LR": 3e-4,
     "NUM_ENVS": 4096,
     "NUM_STEPS": 10,
-    "TOTAL_TIMESTEPS": 2e8,
+    "TOTAL_TIMESTEPS": 3e8,
     "UPDATE_EPOCHS": 4,
     "NUM_MINIBATCHES": 32,
     "GAMMA": 0.99,
     "GAE_LAMBDA": 0.95,
     "CLIP_EPS": 0.2,
-    "ENT_COEF": 0.0006,
+    "ENT_COEF": 0.000,
     "VF_COEF": 0.5,
-    "MAX_GRAD_NORM": 0.25,
+    "MAX_GRAD_NORM": 0.5,
     "ACTIVATION": "tanh",
     "ENV_NAME": "hopper",
-    "ANNEAL_LR": False,
+    "ANNEAL_LR": True,
     "NORMALIZE_ENV": True,
     "LOGGING": True,
 }
@@ -292,9 +296,9 @@ def make_train(config):
                 train_state, traj_batch, advantages, targets, rng = update_state
                 rng, _rng = jax.random.split(rng)
                 batch_size = config["MINIBATCH_SIZE"] * config["NUM_MINIBATCHES"]
-                assert (
-                    batch_size == config["NUM_STEPS"] * config["NUM_ENVS"]
-                ), "batch size must be equal to number of steps * number of envs"
+                assert batch_size == config["NUM_STEPS"] * config["NUM_ENVS"], (
+                    "batch size must be equal to number of steps * number of envs"
+                )
                 permutation = jax.random.permutation(_rng, batch_size)
                 batch = (traj_batch, advantages, targets)
                 batch = jax.tree_util.tree_map(
@@ -323,8 +327,8 @@ def make_train(config):
             train_state = update_state[0]
             metric = traj_batch.info
             rng = update_state[-1]
-            if config.get("LOGGING", False):
 
+            if config.get("LOGGING", False):
                 jax.experimental.io_callback(callback, None, metric)
 
             runner_state = (train_state, env_state, last_obs, rng)
@@ -343,7 +347,11 @@ def make_train(config):
 
 
 def main():
-    global config
+    global config, LOG_DIR
+
+    # Check if log directory exists
+    if not LOG_DIR.exists():
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
 
     if config["LOGGING"]:
         wandb.login()
@@ -363,9 +371,7 @@ def main():
         wandb.run.save()
         print("Wandb run started")
 
-    # Measure total training time
-
-    rng = jax.random.PRNGKey(1487823)
+    rng = jax.random.PRNGKey(74837483)
 
     train_jit = jax.jit(make_train(config))
     start_time = time.time()
@@ -380,18 +386,24 @@ def main():
     train_state = out["runner_state"][0]
     params = train_state.params
 
-    save_path = pathlib.Path("final_policy.msgpack")
-    with save_path.open("wb") as f:
-        f.write(to_bytes(params))
-    train_state = out["runner_state"][0]
-    params = train_state.params
+    if config["NORMALIZE_ENV"]:
+        env_state = out["runner_state"][1]
+        obs_mean = env_state.env_state.mean[0]
+        obs_var = env_state.env_state.var[0]
 
-    save_path = pathlib.Path("final_policy.msgpack")
-    with save_path.open("wb") as f:
-        f.write(to_bytes(params))
+        # Write the normalization parameters to a file
+        norm_params_path = pathlib.Path("norm_params.msgpack")
+        with norm_params_path.open("wb") as f:
+            f.write(to_bytes((obs_mean, obs_var)))
+        print("Normalization parameters saved to: ", norm_params_path)
+    else:
+        obs_mean = jnp.zeros((1,))
+        obs_var = jnp.ones((1,))
 
     if config["LOGGING"]:
-        wandb.save(str(save_path), base_path=".", policy="now")
+        save_path = LOG_DIR / f"{run.name}_final_policy.zip"
+        save_model(params, obs_mean, obs_var, save_path)
+
         wandb.finish()
         print("Wandb run finished")
     print("Final policy saved to: ", save_path)
