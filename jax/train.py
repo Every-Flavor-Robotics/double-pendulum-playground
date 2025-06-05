@@ -4,6 +4,7 @@ import time
 import zipfile
 from typing import NamedTuple
 
+import numpy as np
 import optax
 from flax.serialization import to_bytes
 from flax.training.train_state import TrainState
@@ -13,6 +14,7 @@ from wrappers import (
     InvertedDoublePendulumGymnaxWrapper,
     NormalizeVecObservation,
     NormalizeVecReward,
+    TimeOffset,
     VecEnv,
 )
 
@@ -28,13 +30,13 @@ config = {
     "LR": 3e-4,
     "NUM_ENVS": 4096,
     "NUM_STEPS": 10,
-    "TOTAL_TIMESTEPS": 3e8,
+    "TOTAL_TIMESTEPS": 8e8,
     "UPDATE_EPOCHS": 4,
     "NUM_MINIBATCHES": 32,
     "GAMMA": 0.99,
     "GAE_LAMBDA": 0.95,
     "CLIP_EPS": 0.2,
-    "ENT_COEF": 0.000,
+    "ENT_COEF": 0.0,
     "VF_COEF": 0.5,
     "MAX_GRAD_NORM": 0.5,
     "ACTIVATION": "tanh",
@@ -47,12 +49,19 @@ config = {
 steps_elapsed = 0
 
 
-def callback(info):
+def callback(info, loss_info):
     global steps_elapsed, config
 
     done = info["returned_episode"]
     returns = info["returned_episode_returns"]
     lengths = info["returned_episode_lengths"]
+
+    # Unpack loss info
+    value_loss = loss_info["value_loss"]
+    actor_loss = loss_info["actor_loss"]
+    entropy = loss_info["entropy"]
+    pred_loss = loss_info["pred_loss"]
+
     # Only consider environments where episode ended during this step
     mask = done.astype(bool)
 
@@ -71,6 +80,9 @@ def callback(info):
         print(f"Step {steps_elapsed}:")
         print(f"  Average return: {avg_return}")
         print(f"  Average length: {avg_length}")
+        print(f"  Value loss: {value_loss}")
+        print(f"  Actor loss: {actor_loss}")
+        print(f"  Entropy: {entropy}")
 
         # Log average episode return and length to wandb
         wandb.log(
@@ -78,6 +90,10 @@ def callback(info):
                 "rollout/ep_rew_mean": avg_return,
                 "rollout/ep_len_mean": avg_length,
                 "global_step": steps_elapsed * config["NUM_ENVS"] * config["NUM_STEPS"],
+                "train/value_loss": value_loss,
+                "train/actor_loss": actor_loss,
+                "train/entropy": entropy,
+                "train/pred_loss": pred_loss,
             }
         )
     else:
@@ -93,6 +109,8 @@ class Transition(NamedTuple):
     reward: jnp.ndarray
     log_prob: jnp.ndarray
     obs: jnp.ndarray
+    value_obs: jnp.ndarray
+    pred_obs: jnp.ndarray
     info: jnp.ndarray
 
 
@@ -105,6 +123,7 @@ def make_train(config):
     )
 
     env, env_params = InvertedDoublePendulumGymnaxWrapper(), None
+    env = TimeOffset(env)
     env = LogWrapper(env)
     env = ClipAction(env)
     env = VecEnv(env)
@@ -142,8 +161,10 @@ def make_train(config):
             env.action_space(env_params).shape[0], activation=config["ACTIVATION"]
         )
         rng, _rng = jax.random.split(rng)
+
         init_x = jnp.zeros(env.observation_space(env_params).shape)
-        network_params = network.init(_rng, init_x)
+        # init_x = jnp.zeros((27,))
+        network_params = network.init(_rng, init_x, init_x[..., :-1])
 
         if config["ANNEAL_LR"]:
             tx = optax.chain(
@@ -153,8 +174,9 @@ def make_train(config):
         else:
             tx = optax.chain(
                 optax.clip_by_global_norm(config["MAX_GRAD_NORM"]),
-                optax.adam(config["LR"], eps=1e-5),
+                optax.adam(config["LR"]),  # eps=1e-5),
             )
+
         train_state = TrainState.create(
             apply_fn=network.apply,
             params=network_params,
@@ -167,15 +189,19 @@ def make_train(config):
 
         obsv, env_state = env.reset(reset_rng, env_params)
 
+        value_obsv = obsv
+
         # TRAIN LOOP
         def _update_step(runner_state, unused):
             # COLLECT TRAJECTORIES
             def _env_step(runner_state, unused):
-                train_state, env_state, last_obs, rng = runner_state
+                train_state, env_state, last_obs, value_obs, rng = runner_state
 
                 # SELECT ACTION
                 rng, _rng = jax.random.split(rng)
-                pi, value = network.apply(train_state.params, last_obs)
+                pi, value, pred_obs = network.apply(
+                    train_state.params, last_obs, value_obs
+                )
                 action = pi.sample(seed=_rng)
                 log_prob = pi.log_prob(action)
 
@@ -185,6 +211,7 @@ def make_train(config):
                 obsv, env_state, reward, done, info = env.step(
                     rng_step, env_state, action, env_params
                 )
+                value_obsv = info["value_observation"]
 
                 info_filtered = {"termination": info["termination"]}
                 info_filtered["returned_episode"] = info["returned_episode"]
@@ -196,10 +223,18 @@ def make_train(config):
                 ]
 
                 transition = Transition(
-                    done, action, value, reward, log_prob, last_obs, info_filtered
+                    done,
+                    action,
+                    value,
+                    reward,
+                    log_prob,
+                    last_obs,
+                    value_obsv,
+                    pred_obs,
+                    info_filtered,
                 )
 
-                runner_state = (train_state, env_state, obsv, rng)
+                runner_state = (train_state, env_state, obsv, value_obsv, rng)
                 return runner_state, transition
 
             runner_state, traj_batch = jax.lax.scan(
@@ -207,8 +242,8 @@ def make_train(config):
             )
 
             # CALCULATE ADVANTAGE
-            train_state, env_state, last_obs, rng = runner_state
-            _, last_val = network.apply(train_state.params, last_obs)
+            train_state, env_state, last_obs, last_value_obs, rng = runner_state
+            _, last_val, _ = network.apply(train_state.params, last_obs, last_value_obs)
 
             def _calculate_gae(traj_batch, last_val):
                 # Use both terminated and truncated
@@ -250,7 +285,9 @@ def make_train(config):
 
                     def _loss_fn(params, traj_batch, gae, targets):
                         # RERUN NETWORK
-                        pi, value = network.apply(params, traj_batch.obs)
+                        pi, value, pred_obs = network.apply(
+                            params, traj_batch.obs, traj_batch.value_obs
+                        )
                         log_prob = pi.log_prob(traj_batch.action)
 
                         # CALCULATE VALUE LOSS
@@ -279,12 +316,18 @@ def make_train(config):
                         loss_actor = loss_actor.mean()
                         entropy = pi.entropy().mean()
 
+                        # Calculate observation prediction loss
+                        # target = traj_batch.value_obs - traj_batch.obs[..., :-1]
+                        # pred_loss = jnp.square(pred_obs - target).mean()
+                        pred_loss = 0
+
                         total_loss = (
                             loss_actor
                             + config["VF_COEF"] * value_loss
                             - config["ENT_COEF"] * entropy
+                            # + 10.0 * pred_loss
                         )
-                        return total_loss, (value_loss, loss_actor, entropy)
+                        return total_loss, (value_loss, loss_actor, entropy, pred_loss)
 
                     grad_fn = jax.value_and_grad(_loss_fn, has_aux=True)
                     total_loss, grads = grad_fn(
@@ -296,9 +339,9 @@ def make_train(config):
                 train_state, traj_batch, advantages, targets, rng = update_state
                 rng, _rng = jax.random.split(rng)
                 batch_size = config["MINIBATCH_SIZE"] * config["NUM_MINIBATCHES"]
-                assert batch_size == config["NUM_STEPS"] * config["NUM_ENVS"], (
-                    "batch size must be equal to number of steps * number of envs"
-                )
+                assert (
+                    batch_size == config["NUM_STEPS"] * config["NUM_ENVS"]
+                ), "batch size must be equal to number of steps * number of envs"
                 permutation = jax.random.permutation(_rng, batch_size)
                 batch = (traj_batch, advantages, targets)
                 batch = jax.tree_util.tree_map(
@@ -328,14 +371,25 @@ def make_train(config):
             metric = traj_batch.info
             rng = update_state[-1]
 
-            if config.get("LOGGING", False):
-                jax.experimental.io_callback(callback, None, metric)
+            total_loss, (value_loss, actor_loss, entropy, pred_loss) = loss_info
 
-            runner_state = (train_state, env_state, last_obs, rng)
+            # Reduce losses to scalar, mean
+            loss_info = {
+                "total_loss": total_loss.mean(),
+                "value_loss": value_loss.mean(),
+                "actor_loss": actor_loss.mean(),
+                "entropy": entropy.mean(),
+                "pred_loss": pred_loss.mean(),
+            }
+
+            if config.get("LOGGING", False):
+                jax.experimental.io_callback(callback, None, metric, loss_info)
+
+            runner_state = (train_state, env_state, last_obs, last_value_obs, rng)
             return runner_state, metric
 
         rng, _rng = jax.random.split(rng)
-        runner_state = (train_state, env_state, obsv, _rng)
+        runner_state = (train_state, env_state, obsv, value_obsv, _rng)
 
         runner_state, _ = jax.lax.scan(
             _update_step, runner_state, None, config["NUM_UPDATES"]
@@ -348,6 +402,10 @@ def make_train(config):
 
 def main():
     global config, LOG_DIR
+
+    # Sample random seed
+    seed = np.random.randint(0, 2**32 - 1)
+    config["SEED"] = seed
 
     # Check if log directory exists
     if not LOG_DIR.exists():
@@ -371,7 +429,7 @@ def main():
         wandb.run.save()
         print("Wandb run started")
 
-    rng = jax.random.PRNGKey(74837483)
+    rng = jax.random.PRNGKey(seed)
 
     train_jit = jax.jit(make_train(config))
     start_time = time.time()

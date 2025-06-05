@@ -9,6 +9,7 @@ import numpy as np
 from flax.linen.initializers import constant, orthogonal
 from flax.serialization import from_bytes, to_bytes
 
+import jax
 import jax.numpy as jnp
 
 
@@ -17,11 +18,59 @@ class ActorCritic(nn.Module):
     activation: str = "tanh"
 
     @nn.compact
-    def __call__(self, x):
+    def __call__(self, x, x_val):
         if self.activation == "relu":
             activation = nn.relu
         else:
             activation = nn.tanh
+
+        # Remove action from the input
+        # Split into x and x_val
+        # input_dim = x.shape[-1]
+
+        # x_dim = (input_dim - 1) // 2
+
+        # print(f"input_dim: {input_dim}, x_dim: {x_dim}")
+
+        # x_policy = x[..., :x_dim]
+        # x_val = x[..., x_dim:]
+
+        # print(f"x shape: {x_policy.shape}, x_val shape: {x_val.shape}")
+
+        x_policy = x
+
+        state_prediction_head = nn.Dense(
+            512, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
+        )(x_policy)
+        # state_prediction_head = nn.relu(state_prediction_head)
+
+        # state_prediction_head = nn.Dense(
+        #     512, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
+        # )(state_prediction_head)
+        # state_prediction_head = nn.relu(state_prediction_head)
+
+        # state_prediction_head = nn.Dense(
+        #     512, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
+        # )(state_prediction_head)
+        # state_prediction_head = nn.relu(state_prediction_head)
+
+        # state_prediction_head = nn.Dense(
+        #     512, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
+        # )(state_prediction_head)
+        # state_prediction_head = nn.relu(state_prediction_head)
+
+        # state_prediction_head = nn.Dense(
+        #     x_val.shape[-1],
+        #     kernel_init=orthogonal(np.sqrt(1.0)),
+        #     bias_init=constant(0.0),
+        # )(state_prediction_head)
+
+        # Stop gradient to prevent backpropagation through the state prediction head
+        state_input = jax.lax.stop_gradient(state_prediction_head)
+
+        # Concatenate the state prediction head with the input
+        # x = x.at[..., :-1].add(state_input)
+
         actor_mean = nn.Dense(
             256, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
         )(x)
@@ -42,15 +91,32 @@ class ActorCritic(nn.Module):
             256, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
         )(actor_mean)
         actor_mean = activation(actor_mean)
-        actor_mean = nn.Dense(
-            self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0)
+
+        actor_head = nn.Dense(
+            256, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
         )(actor_mean)
+        actor_head = activation(actor_head)
+        actor_head = nn.Dense(
+            self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0)
+        )(actor_head)
         actor_logtstd = self.param("log_std", nn.initializers.zeros, (self.action_dim,))
-        pi = distrax.MultivariateNormalDiag(actor_mean, jnp.exp(actor_logtstd))
+        pi = distrax.MultivariateNormalDiag(actor_head, jnp.exp(actor_logtstd))
+
+        # state_prediction_head = nn.Dense(
+        #     256, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
+        # )(actor_mean)
+        # state_prediction_head = activation(state_prediction_head)
+        # # Make output dimension same as input dimension, minus the action dimension
+        # output_dim = x_val.shape[-1]
+        # state_prediction_head = nn.Dense(
+        #     output_dim, kernel_init=orthogonal(1.0), bias_init=constant(0.0)
+        # )(state_prediction_head)
+
+        # Add another head as an auxillary loss, to predict the "real" state
 
         critic = nn.Dense(
             256, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
-        )(x)
+        )(x_policy)
         critic = activation(critic)
         critic = nn.Dense(
             256, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
@@ -72,7 +138,7 @@ class ActorCritic(nn.Module):
             critic
         )
 
-        return pi, jnp.squeeze(critic, axis=-1)
+        return pi, jnp.squeeze(critic, axis=-1), state_prediction_head
 
 
 def save_model(params, obs_mean, obs_var, save_path):
@@ -127,8 +193,14 @@ def load_model(zip_path, model, key, env):
         with zipf.open("norm_params.msgpack") as f:
             obs_data = f.read()
 
+    x_shape = env.observation_space(None).shape
+    x_val_shape = (env.observation_space(None).shape[0] - 1,)
     params = from_bytes(
-        model.init(key, jnp.zeros(env.observation_space(None).shape)),
+        model.init(
+            key,
+            jnp.zeros(x_shape),
+            jnp.zeros(x_val_shape),
+        ),
         params_bytes,
     )
 

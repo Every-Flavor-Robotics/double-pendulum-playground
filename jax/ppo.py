@@ -1,20 +1,16 @@
-import jax
-import jax.numpy as jnp
+from typing import Any, NamedTuple, Sequence
+
+import distrax
 import flax.linen as nn
 import numpy as np
 import optax
 from flax.linen.initializers import constant, orthogonal
-from typing import Sequence, NamedTuple, Any
 from flax.training.train_state import TrainState
-import distrax
-from wrappers import (
-    LogWrapper,
-    BraxGymnaxWrapper,
-    VecEnv,
-    NormalizeVecObservation,
-    NormalizeVecReward,
-    ClipAction,
-)
+from wrappers import (BraxGymnaxWrapper, ClipAction, LogWrapper,
+                      NormalizeVecObservation, NormalizeVecReward, VecEnv)
+
+import jax
+import jax.numpy as jnp
 
 
 class ActorCritic(nn.Module):
@@ -58,6 +54,8 @@ class ActorCritic(nn.Module):
 
 class Transition(NamedTuple):
     done: jnp.ndarray
+    terminated: jnp.ndarray
+    truncated: jnp.ndarray
     action: jnp.ndarray
     value: jnp.ndarray
     reward: jnp.ndarray
@@ -164,6 +162,8 @@ def make_train(config):
                         + config["GAMMA"] * config["GAE_LAMBDA"] * (1 - done) * gae
                     )
                     return (gae, value), gae
+
+
 
                 _, advantages = jax.lax.scan(
                     _get_advantages,
@@ -286,28 +286,3 @@ def make_train(config):
         return {"runner_state": runner_state, "metrics": metric}
 
     return train
-
-
-if __name__ == "__main__":
-    config = {
-        "LR": 3e-4,
-        "NUM_ENVS": 2048,
-        "NUM_STEPS": 10,
-        "TOTAL_TIMESTEPS": 5e7,
-        "UPDATE_EPOCHS": 4,
-        "NUM_MINIBATCHES": 32,
-        "GAMMA": 0.99,
-        "GAE_LAMBDA": 0.95,
-        "CLIP_EPS": 0.2,
-        "ENT_COEF": 0.0,
-        "VF_COEF": 0.5,
-        "MAX_GRAD_NORM": 0.5,
-        "ACTIVATION": "tanh",
-        "ENV_NAME": "hopper",
-        "ANNEAL_LR": False,
-        "NORMALIZE_ENV": True,
-        "DEBUG": True,
-    }
-    rng = jax.random.PRNGKey(30)
-    train_jit = jax.jit(make_train(config))
-    out = train_jit(rng)

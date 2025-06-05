@@ -9,6 +9,7 @@ from wrappers import (
     InvertedDoublePendulumGymnaxWrapper,
     NormalizeVecObservation,
     NormalizeVecReward,
+    TimeOffset,
     VecEnv,
 )
 
@@ -23,13 +24,15 @@ mode_switch_steps = 1000
 episode_length = mode_switch_steps * len(mode_order)
 
 env = InvertedDoublePendulumGymnaxWrapper()
+env = TimeOffset(env)
 env = ClipAction(env)
+
 
 # -------- Load trained policy --------
 model = ActorCritic(action_dim=env.action_space(None).shape[0], activation="tanh")
 
 params, obs_mean, obs_var = load_model(
-    "logs/distinctive-waterfall-276_final_policy.zip", model, jax.random.PRNGKey(0), env
+    "logs/northern-snowflake-326_final_policy.zip", model, jax.random.PRNGKey(0), env
 )
 
 # model = ActorCritic(action_dim=env.action_space(None).shape[0], activation="tanh")
@@ -58,26 +61,35 @@ rewards = []
 @partial(jax.jit, static_argnums=2)
 def run_rollout(rng, params, episode_length):
     def step_fn(carry, _):
-        rng, state = carry
+        rng, state, obs = carry
         rng, key = jax.random.split(rng)
 
         # Normalize observation
-        obs = state.obs
+        # obs = state.obs
         obs = (obs - obs_mean) / jnp.sqrt(obs_var + 1e-8)
 
-        pi, _ = model.apply(params, obs)
+        value_obs = state.env_state.info["value_observation"]
+        value_obs = (value_obs - obs_mean[..., :-1]) / jnp.sqrt(
+            obs_var[..., :-1] + 1e-8
+        )
+
+        pi, _, _ = model.apply(params, obs, value_obs)
         action = pi.mean()
         # Sample zero action
         # action = jnp.zeros_like(action)
         # action = pi.sample(seed=key)
         obs, next_state, reward, done, info = env.step(key, state, action)
-        carry = (rng, next_state)
+        next_state.env_state.info["value_observation"] = info["value_observation"]
+
+        carry = (rng, next_state, obs)
         return carry, (next_state, reward, done)
 
     key, reset_key = jax.random.split(rng)
     obs, state = env.reset(reset_key)
+    state.env_state.info["value_observation"] = obs[..., :-1]
+    # obs_val = obs[..., :-1]
     initial_state = state
-    carry = (key, state)
+    carry = (key, state, obs)
 
     carry, (states, rewards, dones) = jax.lax.scan(
         step_fn, carry, None, length=episode_length
@@ -96,8 +108,8 @@ def run_rollout(rng, params, episode_length):
 def unbatch_states(batched_states):
     # Unzip time dimension into list of field-wise dicts
     return [
-        jax.tree_util.tree_map(lambda x: x[i], batched_states)
-        for i in range(batched_states.obs.shape[0])
+        jax.tree_util.tree_map(lambda x: x[i], batched_states.env_state)
+        for i in range(batched_states.env_state.obs.shape[0])
     ]
 
 
@@ -116,7 +128,7 @@ for i in range(n_episodes):
 
     # --- Render rollout ---
     render_every = 1
-    frames = [env.render(s) for s in state_list[::render_every]]
+    frames = [env._env.render(s) for s in state_list[::render_every]]
 
     # # --- Save video ---
     video_path = pathlib.Path(f"rollout_{i}.mp4")

@@ -201,12 +201,23 @@ class InvertedDoublePendulumEnv(mjx_env.MjxEnv):
         self.target_mode = None
         self.NUM_MODES = 4
 
+        # observation_space = Box(low=-np.inf, high=np.inf, shape=(9,), dtype=np.float64)
+        # observation_space = Box(low=-np.inf, high=np.inf, shape=(18,), dtype=np.float64)
+
+        # Add one hot vector at end of observation space for current target mode
+        # new_shape = (observation_space.shape[0] + self.NUM_MODES,)
+        # new_high = np.append(observation_space.high, np.ones(self.NUM_MODES))
+        # new_low = np.append(observation_space.low, np.zeros(self.NUM_MODES))
+
         observation_space = Box(low=-np.inf, high=np.inf, shape=(9,), dtype=np.float64)
 
         # Add one hot vector at end of observation space for current target mode
         new_shape = (observation_space.shape[0] + self.NUM_MODES,)
         new_high = np.append(observation_space.high, np.ones(self.NUM_MODES))
         new_low = np.append(observation_space.low, np.zeros(self.NUM_MODES))
+
+        # new_high = np.append(new_high, np.ones(1))
+        # new_low = np.append(new_low, -1 * np.ones(1))
 
         self.observation_space = Box(
             low=new_low, high=new_high, shape=new_shape, dtype=np.float64

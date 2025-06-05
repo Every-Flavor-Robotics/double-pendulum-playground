@@ -41,9 +41,10 @@ class InvertedDoublePendulumGymnaxWrapper:
             next_state.reward,
             next_state.done > 0.5,
             {
-                "dead_steps": next_state.info["dead_steps"],
-                "mode_switch_steps": next_state.info["mode_switch_steps"],
+                # "dead_steps": next_state.info["dead_steps"],
+                # "mode_switch_steps": next_state.info["mode_switch_steps"],
                 "termination": next_state.done > 0.5,
+                "was_reset": next_state.info["was_reset"],
             },
         )
 
@@ -65,6 +66,70 @@ class InvertedDoublePendulumGymnaxWrapper:
 
     def render(self, state):
         return self._env.render(state)
+
+
+@struct.dataclass
+class TimeOffsetState:
+    prev_action: jnp.ndarray
+    prev_obs: jnp.ndarray
+    env_state: environment.EnvState
+
+
+class TimeOffset(GymnaxWrapper):
+    """Time Offset shifts the observation by 1 step."""
+
+    def __init__(self, env):
+        super().__init__(env)
+
+    def reset(self, key, params=None):
+        obs, state = self._env.reset(key, params)
+
+        # Generate a 0 action
+        prev_obs = jnp.zeros_like(obs)
+        prev_action = jnp.zeros((1,))
+
+        state = TimeOffsetState(
+            prev_action=prev_action,
+            prev_obs=obs,
+            env_state=state,
+        )
+
+        # Combine the two observations
+        # obs = jnp.concatenate((prev_obs, prev_action), axis=-1)
+        # obs = jnp.concatenate((obs, prev_action, obs), axis=-1)
+
+        return obs, state
+
+    def step(self, key, state, action, params=None):
+        # Update the info with the new rng key
+        new_obs, env_state, reward, done, info = self._env.step(
+            key, state.env_state, action, params
+        )
+
+        # Update the observation
+        # If the environment was reset, we want to use the new observation
+        # Otherwise, we want to use the previous observation
+        # obs = jax.lax.cond(
+        #     info["was_reset"] > 0.5,
+        #     lambda _: jnp.concatenate(
+        #         (jnp.zeros_like(new_obs), jnp.zeros((1,))), axis=-1
+        #     ),
+        #     lambda _: jnp.concatenate((state.prev_obs, state.prev_action), axis=-1),
+        #     operand=None,
+        # )
+        # obs = jnp.concatenate((new_obs, state.prev_action, new_obs), axis=-1)
+
+        state = TimeOffsetState(
+            prev_action=action,
+            prev_obs=new_obs,
+            env_state=env_state,
+        )
+
+        # Value function should get the most recent observation
+        # info["value_observation"] = jnp.concatenate((prev_obs, new_obs), axis=-1)
+        info["value_observation"] = new_obs
+
+        return new_obs, state, reward, done, info
 
 
 class ClipAction(GymnaxWrapper):
@@ -148,6 +213,17 @@ class NormalizeVecObservation(GymnaxWrapper):
         M2 = m_a + m_b + jnp.square(delta) * state.count * batch_count / tot_count
         new_var = M2 / tot_count
         new_count = tot_count
+
+        # info["value_observation"] contains a observation for the value function
+        # Normalize it as well
+        # Last dimension of state.mean and state.var is 1 element longer than value_obs
+        # because of the action dimension
+        # Remove the last element of state.mean and state.var
+        # val_mean = state.mean[..., :-1]
+        # val_var = state.var[..., :-1]
+        # info["value_observation"] = (info["value_observation"] - val_mean) / jnp.sqrt(
+        #     val_var + 1e-8
+        # )
 
         state = NormalizeVecObsEnvState(
             mean=new_mean,

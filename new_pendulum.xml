@@ -38,6 +38,8 @@
             type="capsule"/>
 
         <!-- True range:  range="-0.5381625 0.5381625"-->
+        <!-- 52.24 Is the motor damping -->
+        <!-- 0.13 is the slide damping -->
         <body name="cart" pos="0 0 0">
             <joint axis="1 0 0" limited="true" margin="0.01" name="slider" pos="0 0 0" range="-0.5381625 0.5381625"
                 type="slide" damping="0.13" frictionloss="1"/>
@@ -65,6 +67,34 @@
     </worldbody>
 
     <actuator>
-        <motor ctrllimited="true" ctrlrange="-1 1" gear="10" joint="slider" name="slide" />
+        <motor ctrllimited="true" ctrlrange="-1 1" gear="15" joint="slider" name="slide" />
     </actuator>
+
+    <!-- <actuator>
+    <motor
+        joint="slider"
+        name="slide"
+        gear="45.71428571428572"
+        forcelimited="true"
+        ctrlrange="-1 1"
+        forcerange="-45.71428571428572 45.71428571428572"
+        dynprm="0 0 52.2448979591837 0"
+    />
+    </actuator> -->
+    <!-- <actuator>
+        <general
+            name="slide"
+            joint="slider"
+            ctrllimited="true"
+            ctrlrange="-1 1"
+
+            forcelimited="true"
+            forcerange="-45.7 45.7"
+
+            gaintype="fixed"
+            gainprm="45.7 0 0"
+
+            biasprm="0 0 0"
+        />
+    </actuator> -->
 </mujoco>
