@@ -1,7 +1,5 @@
 import pathlib
-import tempfile
 import time
-import zipfile
 from typing import NamedTuple
 
 import optax
@@ -28,7 +26,7 @@ config = {
     "LR": 3e-4,
     "NUM_ENVS": 4096,
     "NUM_STEPS": 10,
-    "TOTAL_TIMESTEPS": 3e8,
+    "TOTAL_TIMESTEPS": 8e8,
     "UPDATE_EPOCHS": 4,
     "NUM_MINIBATCHES": 32,
     "GAMMA": 0.99,
@@ -47,12 +45,19 @@ config = {
 steps_elapsed = 0
 
 
-def callback(info):
+def callback(info, loss_info):
     global steps_elapsed, config
 
     done = info["returned_episode"]
     returns = info["returned_episode_returns"]
     lengths = info["returned_episode_lengths"]
+
+    # Unpack loss info
+    value_loss = loss_info["value_loss"]
+    actor_loss = loss_info["actor_loss"]
+    entropy = loss_info["entropy"]
+    pred_loss = loss_info["pred_loss"]
+
     # Only consider environments where episode ended during this step
     mask = done.astype(bool)
 
@@ -71,6 +76,9 @@ def callback(info):
         print(f"Step {steps_elapsed}:")
         print(f"  Average return: {avg_return}")
         print(f"  Average length: {avg_length}")
+        print(f"  Value loss: {value_loss}")
+        print(f"  Actor loss: {actor_loss}")
+        print(f"  Entropy: {entropy}")
 
         # Log average episode return and length to wandb
         wandb.log(
@@ -78,6 +86,10 @@ def callback(info):
                 "rollout/ep_rew_mean": avg_return,
                 "rollout/ep_len_mean": avg_length,
                 "global_step": steps_elapsed * config["NUM_ENVS"] * config["NUM_STEPS"],
+                "train/value_loss": value_loss,
+                "train/actor_loss": actor_loss,
+                "train/entropy": entropy,
+                "train/pred_loss": pred_loss,
             }
         )
     else:
@@ -296,9 +308,9 @@ def make_train(config):
                 train_state, traj_batch, advantages, targets, rng = update_state
                 rng, _rng = jax.random.split(rng)
                 batch_size = config["MINIBATCH_SIZE"] * config["NUM_MINIBATCHES"]
-                assert batch_size == config["NUM_STEPS"] * config["NUM_ENVS"], (
-                    "batch size must be equal to number of steps * number of envs"
-                )
+                assert (
+                    batch_size == config["NUM_STEPS"] * config["NUM_ENVS"]
+                ), "batch size must be equal to number of steps * number of envs"
                 permutation = jax.random.permutation(_rng, batch_size)
                 batch = (traj_batch, advantages, targets)
                 batch = jax.tree_util.tree_map(
@@ -329,7 +341,7 @@ def make_train(config):
             rng = update_state[-1]
 
             if config.get("LOGGING", False):
-                jax.experimental.io_callback(callback, None, metric)
+                jax.experimental.io_callback(callback, None, metric, loss_info)
 
             runner_state = (train_state, env_state, last_obs, rng)
             return runner_state, metric
