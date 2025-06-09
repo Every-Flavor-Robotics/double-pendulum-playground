@@ -2,6 +2,7 @@ import pathlib
 import time
 from typing import NamedTuple
 
+import numpy as np
 import optax
 from flax.serialization import to_bytes
 from flax.training.train_state import TrainState
@@ -56,7 +57,6 @@ def callback(info, loss_info):
     value_loss = loss_info["value_loss"]
     actor_loss = loss_info["actor_loss"]
     entropy = loss_info["entropy"]
-    pred_loss = loss_info["pred_loss"]
 
     # Only consider environments where episode ended during this step
     mask = done.astype(bool)
@@ -89,7 +89,6 @@ def callback(info, loss_info):
                 "train/value_loss": value_loss,
                 "train/actor_loss": actor_loss,
                 "train/entropy": entropy,
-                "train/pred_loss": pred_loss,
             }
         )
     else:
@@ -340,6 +339,16 @@ def make_train(config):
             metric = traj_batch.info
             rng = update_state[-1]
 
+            total_loss, (value_loss, actor_loss, entropy) = loss_info
+
+            # Reduce losses to scalar, mean
+            loss_info = {
+                "total_loss": total_loss.mean(),
+                "value_loss": value_loss.mean(),
+                "actor_loss": actor_loss.mean(),
+                "entropy": entropy.mean(),
+            }
+
             if config.get("LOGGING", False):
                 jax.experimental.io_callback(callback, None, metric, loss_info)
 
@@ -361,11 +370,20 @@ def make_train(config):
 def main():
     global config, LOG_DIR
 
+    # Sample random seed
+    seed = np.random.randint(0, 2**32 - 1)
+    config["SEED"] = seed
+
     # Check if log directory exists
     if not LOG_DIR.exists():
         LOG_DIR.mkdir(parents=True, exist_ok=True)
 
     if config["LOGGING"]:
+
+        # Ask user to provide a short description for the run
+        run_description = input("Enter a short description for the run: ")
+        config["RUN_DESCRIPTION"] = run_description
+
         wandb.login()
 
         run = wandb.init(
@@ -383,7 +401,7 @@ def main():
         wandb.run.save()
         print("Wandb run started")
 
-    rng = jax.random.PRNGKey(74837483)
+    rng = jax.random.PRNGKey(seed)
 
     train_jit = jax.jit(make_train(config))
     start_time = time.time()
