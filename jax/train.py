@@ -12,6 +12,7 @@ from wrappers import (
     InvertedDoublePendulumGymnaxWrapper,
     NormalizeVecObservation,
     NormalizeVecReward,
+    TimeOffset,
     VecEnv,
 )
 
@@ -33,7 +34,7 @@ config = {
     "GAMMA": 0.99,
     "GAE_LAMBDA": 0.95,
     "CLIP_EPS": 0.2,
-    "ENT_COEF": 0.000,
+    "ENT_COEF": 0.0,
     "VF_COEF": 0.5,
     "MAX_GRAD_NORM": 0.5,
     "ACTIVATION": "tanh",
@@ -116,6 +117,7 @@ def make_train(config):
     )
 
     env, env_params = InvertedDoublePendulumGymnaxWrapper(), None
+    env = TimeOffset(env)
     env = LogWrapper(env)
     env = ClipAction(env)
     env = VecEnv(env)
@@ -379,7 +381,6 @@ def main():
         LOG_DIR.mkdir(parents=True, exist_ok=True)
 
     if config["LOGGING"]:
-
         # Ask user to provide a short description for the run
         run_description = input("Enter a short description for the run: ")
         config["RUN_DESCRIPTION"] = run_description

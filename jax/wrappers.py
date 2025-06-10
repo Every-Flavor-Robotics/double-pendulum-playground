@@ -1,4 +1,6 @@
+import numpy as np
 from flax import struct
+from gymnasium.spaces import Box
 from gymnax.environments import environment
 from gymnax.wrappers.purerl import GymnaxWrapper
 from inverted_double_pendulum_mjx import InvertedDoublePendulumEnv
@@ -23,7 +25,9 @@ class InvertedDoublePendulumGymnaxWrapper:
         # env = envs.get_environment(env_name=env_name, backend=backend)
         # env = EpisodeWrapper(env, episode_length=1000, action_repeat=1)
         # env = AutoResetWrapper(env)
+
         self._env = env
+
         self.action_size = env.action_size
         self.observation_size = (env.observation_size,)
 
@@ -44,6 +48,7 @@ class InvertedDoublePendulumGymnaxWrapper:
                 "dead_steps": next_state.info["dead_steps"],
                 "mode_switch_steps": next_state.info["mode_switch_steps"],
                 "termination": next_state.done > 0.5,
+                "was_reset": next_state.info["was_reset"],
             },
         )
 
@@ -65,6 +70,101 @@ class InvertedDoublePendulumGymnaxWrapper:
 
     def render(self, state):
         return self._env.render(state)
+
+
+@struct.dataclass
+class TimeOffsetState:
+    prev_action: jnp.ndarray
+    prev_obs: jnp.ndarray
+    env_state: environment.EnvState
+
+
+class TimeOffset(GymnaxWrapper):
+    """Time Offset shifts the observation by 1 step."""
+
+    def __init__(self, env):
+        super().__init__(env)
+
+        # Get the observation space
+
+        obs_space = self._env.observation_space(None)
+        action_space = self._env.action_space(None)
+
+        new_low = np.concatenate(
+            (obs_space.low, action_space.low, obs_space.low), axis=-1
+        )
+
+        new_high = np.concatenate(
+            (obs_space.high, action_space.high, obs_space.high), axis=-1
+        )
+        self.obs_space = Box(
+            low=new_low,
+            high=new_high,
+            shape=(obs_space.shape[0] + action_space.shape[0] + obs_space.shape[0],),
+            dtype=obs_space.dtype,
+        )
+
+        # Override the observation space to include the previous action and value
+
+    def reset(self, key, params=None):
+        obs, state = self._env.reset(key, params)
+
+        # Generate a 0 action
+        prev_obs = jnp.zeros_like(obs)
+        prev_action = jnp.zeros((1,))
+
+        state = TimeOffsetState(
+            prev_action=prev_action,
+            prev_obs=obs,
+            env_state=state,
+        )
+
+        # Combine the two observations
+        # obs = jnp.concatenate((prev_obs, prev_action), axis=-1)
+        obs = jnp.concatenate((prev_obs, prev_action, obs), axis=-1)
+
+        return obs, state
+
+    # def observation_space(self, params):
+    #     # Override the observation space to include the previous action and value observation
+    #     obs_space = self._env.observation_space(params)
+
+    def step(self, key, state, action, params=None):
+        # Update the info with the new rng key
+        new_obs, env_state, reward, done, info = self._env.step(
+            key, state.env_state, action, params
+        )
+
+        # Update the observation
+        # If the environment was reset, we want to use the new observation
+        # Otherwise, we want to use the previous observation
+        obs = jax.lax.cond(
+            info["was_reset"] > 0.5,
+            lambda _: jnp.concatenate(
+                (jnp.zeros_like(new_obs), jnp.zeros((1,)), jnp.zeros_like(new_obs)),
+                axis=-1,
+            ),
+            lambda _: jnp.concatenate(
+                (state.prev_obs, state.prev_action, new_obs), axis=-1
+            ),
+            operand=None,
+        )
+
+        state = TimeOffsetState(
+            prev_action=action,
+            prev_obs=new_obs,
+            env_state=env_state,
+        )
+
+        # Value function should get the most recent observation
+        # info["value_observation"] = jnp.concatenate((prev_obs, new_obs), axis=-1)
+        info["value_observation"] = new_obs
+
+        return obs, state, reward, done, info
+
+    def observation_space(self, params):
+        """Override the observation space to include the previous action and value observation."""
+        return self.obs_space
 
 
 class ClipAction(GymnaxWrapper):

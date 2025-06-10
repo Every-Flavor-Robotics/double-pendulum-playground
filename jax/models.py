@@ -22,9 +22,15 @@ class ActorCritic(nn.Module):
             activation = nn.relu
         else:
             activation = nn.tanh
+
+        obs_dim = x.shape[-1] // 2
+
+        x_policy = x[..., : obs_dim + 1]
+        x_critic = x[..., obs_dim + 1 :]
+
         actor_mean = nn.Dense(
             256, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
-        )(x)
+        )(x_policy)
         actor_mean = activation(actor_mean)
         actor_mean = nn.Dense(
             256, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
@@ -50,7 +56,7 @@ class ActorCritic(nn.Module):
 
         critic = nn.Dense(
             256, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
-        )(x)
+        )(x_critic)
         critic = activation(critic)
         critic = nn.Dense(
             256, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
