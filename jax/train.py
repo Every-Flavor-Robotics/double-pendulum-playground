@@ -20,7 +20,7 @@ import jax
 import jax.experimental
 import jax.numpy as jnp
 import wandb
-from models import ActorCritic, save_model
+from models import ActorCritic, ActorCriticAssymetric, save_model
 
 LOG_DIR = pathlib.Path("logs")
 
@@ -38,6 +38,7 @@ config = {
     "VF_COEF": 0.5,
     "MAX_GRAD_NORM": 0.5,
     "ACTIVATION": "tanh",
+    "TIME_OFFSET": True,
     "ENV_NAME": "hopper",
     "ANNEAL_LR": True,
     "NORMALIZE_ENV": True,
@@ -117,7 +118,9 @@ def make_train(config):
     )
 
     env, env_params = InvertedDoublePendulumGymnaxWrapper(), None
-    env = TimeOffset(env)
+    # Add TimeOffset wrapper if enabled
+    if config["TIME_OFFSET"]:
+        env = TimeOffset(env)
     env = LogWrapper(env)
     env = ClipAction(env)
     env = VecEnv(env)
@@ -149,9 +152,15 @@ def make_train(config):
         lr = jnp.exp(x * jnp.log(lr_end) + (1 - x) * jnp.log(lr_start))
         return lr
 
+    network_class = None
+    if config["TIME_OFFSET"]:
+        network_class = ActorCriticAssymetric
+    else:
+        network_class = ActorCritic
+
     def train(rng):
         # INIT NETWORK
-        network = ActorCritic(
+        network = network_class(
             env.action_space(env_params).shape[0], activation=config["ACTIVATION"]
         )
         rng, _rng = jax.random.split(rng)
