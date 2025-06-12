@@ -28,7 +28,7 @@ config = {
     "LR": 3e-4,
     "NUM_ENVS": 4096,
     "NUM_STEPS": 10,
-    "TOTAL_TIMESTEPS": 8e8,
+    "TOTAL_TIMESTEPS": 10e8,
     "UPDATE_EPOCHS": 4,
     "NUM_MINIBATCHES": 32,
     "GAMMA": 0.99,
@@ -42,6 +42,8 @@ config = {
     "ENV_NAME": "hopper",
     "ANNEAL_LR": True,
     "NORMALIZE_ENV": True,
+    "USE_MOTOR_MODEL": True,
+    "PENDULUM_XML": "../new_pendulum.xml",
     "LOGGING": True,
 }
 
@@ -117,7 +119,13 @@ def make_train(config):
         config["NUM_ENVS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"]
     )
 
-    env, env_params = InvertedDoublePendulumGymnaxWrapper(), None
+    env, env_params = (
+        InvertedDoublePendulumGymnaxWrapper(
+            use_motor_model=config["USE_MOTOR_MODEL"],
+            xml_file=config["PENDULUM_XML"],
+        ),
+        None,
+    )
     # Add TimeOffset wrapper if enabled
     if config["TIME_OFFSET"]:
         env = TimeOffset(env)
@@ -318,9 +326,9 @@ def make_train(config):
                 train_state, traj_batch, advantages, targets, rng = update_state
                 rng, _rng = jax.random.split(rng)
                 batch_size = config["MINIBATCH_SIZE"] * config["NUM_MINIBATCHES"]
-                assert (
-                    batch_size == config["NUM_STEPS"] * config["NUM_ENVS"]
-                ), "batch size must be equal to number of steps * number of envs"
+                assert batch_size == config["NUM_STEPS"] * config["NUM_ENVS"], (
+                    "batch size must be equal to number of steps * number of envs"
+                )
                 permutation = jax.random.permutation(_rng, batch_size)
                 batch = (traj_batch, advantages, targets)
                 batch = jax.tree_util.tree_map(

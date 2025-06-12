@@ -11,9 +11,9 @@ import jax.numpy as jnp
 
 
 class InvertedDoublePendulumGymnaxWrapper:
-    def __init__(self, mode_switch_steps=1000, switch_order=None):
+    def __init__(self, mode_switch_steps=1000, switch_order=None, **kwargs):
         env = InvertedDoublePendulumEnv(
-            mode_switch_steps=mode_switch_steps, switch_order=switch_order
+            mode_switch_steps=mode_switch_steps, switch_order=switch_order, **kwargs
         )
         env = wrapper.wrap_for_brax_training(
             env,
