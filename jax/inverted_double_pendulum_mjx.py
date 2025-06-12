@@ -1,13 +1,10 @@
 __credits__ = ["Kallinteris-Andreas"]
 
-import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
 import mujoco
 import numpy as np
-from gymnasium import utils
-from gymnasium.envs.mujoco import MujocoEnv
 from gymnasium.spaces import Box
 from ml_collections import config_dict
 from mujoco import mjx
@@ -176,6 +173,7 @@ class InvertedDoublePendulumEnv(mjx_env.MjxEnv):
         mode_switch_steps: int = 1000,  # Number of steps before switching modes
         terminate_on_dead: bool = True,  # Terminate the episode if the pendulum is dead
         switch_order: list = None,
+        use_motor_model: bool = False,
         **kwargs,
     ):
         """_summary_
@@ -200,6 +198,9 @@ class InvertedDoublePendulumEnv(mjx_env.MjxEnv):
         # 2: both down
         self.target_mode = None
         self.NUM_MODES = 4
+
+        # Whether or not to use the motor model for the cart
+        self.use_motor_model = use_motor_model
 
         observation_space = Box(low=-np.inf, high=np.inf, shape=(9,), dtype=np.float64)
 
@@ -264,6 +265,103 @@ class InvertedDoublePendulumEnv(mjx_env.MjxEnv):
             shape=(self._mjx_model.nu,),
             dtype=np.float64,
         )
+
+        if self.use_motor_model:
+            print("Using motor model for the cart.")
+
+            self.motor_resistance = 0.033  # Ohms
+            self.motor_max_voltage = 12.0  # Volts
+            self.motor_max_current = 8.0  # Amps
+            self.motor_kv_rpm_per_v = 350.0
+
+            self.motor_mm_per_revolution = 120.0  # mm per revolution
+            # Used to convert linear travel to angular velocity
+            self.effective_radius = (self.motor_mm_per_revolution / 1000.0) / (
+                2 * np.pi
+            )
+
+            # Gear ratio is input to output, so if motor is 4:1, then output is 1/4 of input speed
+            self.motor_gear_ratio = 4.0
+
+            self.kv_si = (
+                self.motor_kv_rpm_per_v * 2 * np.pi / 60.0
+            )  # Convert RPM/V to rad/s/V
+            self.kt = (
+                1 / self.kv_si
+            )  # Torque constant (Nm/A) is the inverse of kv (V/rad/s)
+
+            self.max_force = (
+                self.motor_max_current * self.kt * self.motor_gear_ratio
+            ) / self.effective_radius  # Max force applied to the cart
+
+            print(
+                f"Motor parameters: kv_si={self.kv_si:.2f} rad/s/V, kt={self.kt:.2f} Nm/A, "
+                f"resistance={self.motor_resistance:.3f} Ohms, "
+                f"max_voltage={self.motor_max_voltage:.2f} V, max_current={self.motor_max_current:.2f} A, "
+                f"effective_radius={self.effective_radius:.3f} m, "
+                f"motor_gear_ratio={self.motor_gear_ratio:.2f}, "
+                f"motor_mm_per_revolution={self.motor_mm_per_revolution:.2f} mm/rev"
+                f", max_force={self.max_force:.2f} N",
+                flush=True,
+            )
+
+            self._step_fn = self._step_motor_model
+        else:
+            print("Using no motor model for the cart.")
+            self._step_fn = self._step_no_motor_model
+
+    def _get_motor_velocity(self, linear_velocity: jax.Array) -> jax.Array:
+        """Convert linear velocity of the slider to shaft velocity based on gear ratio."""
+
+        gearbox_omega = linear_velocity / self.effective_radius
+        return gearbox_omega * self.motor_gear_ratio
+
+    def _get_effective_force(self, action: jax.Array, data: mjx.Data) -> jax.Array:
+        """Convert action to effective force applied to the cart."""
+
+        # Get the current slide velocity from the sim
+        current_slide_velocity = data.qvel[0]
+
+        current_motor_velocity = self._get_motor_velocity(current_slide_velocity)
+
+        # Compute back EMF (electromotive force) based on current motor velocity
+        # V = ω / K_v (rad/s / rad/s/V)
+        back_emf = current_motor_velocity * self.kt
+
+        # Compute the command current
+        command_current = action * self.motor_max_current
+
+        # jax.debug.print(
+        #     "Command current: {x:.3f} A, Back EMF: {y:.3f} V",
+        #     x=command_current.squeeze(),
+        #     y=back_emf.squeeze(),
+        # )
+
+        command_voltage = self.motor_resistance * command_current + back_emf
+
+        command_voltage = jnp.clip(
+            command_voltage,
+            -self.motor_max_voltage,
+            self.motor_max_voltage,
+        )
+
+        # After the command voltage is computed, we can calculate the effective force
+        actual_current = (command_voltage - back_emf) / self.motor_resistance
+
+        # Clip current, just in case
+        actual_current = jnp.clip(
+            actual_current,
+            -self.motor_max_current,
+            self.motor_max_current,
+        )
+        actual_torque = self.kt * actual_current
+        actual_force = actual_torque * self.motor_gear_ratio / self.effective_radius
+
+        # jax.debug.print(
+        #     "Effective force applied to the cart: {x:.3f} N", x=actual_force.squeeze()
+        # )
+
+        return actual_force / self.max_force  # Normalize to [-1, 1] range
 
     def _post_init(self) -> None:
         # self._pole_body_id = self.mj_model.body("pole").id
@@ -357,8 +455,24 @@ class InvertedDoublePendulumEnv(mjx_env.MjxEnv):
         obs = self._get_obs(data, info)
         return mjx_env.State(data, obs, reward, done, metrics, info)
 
+    def _step_motor_model(self, data: mjx.Data, action: jax.Array) -> jax.Array:
+        def body_fn(i, data):
+            # At each substep, recompute motor force based on current velocity
+            mujoco_action = self._get_effective_force(action, data)
+
+            # Step the environment by one substep
+            return mjx_env.step(self.mjx_model, data, mujoco_action, 1)
+
+        # Run the substep loop
+        return lax.fori_loop(0, self.n_substeps, body_fn, data)
+
+    def _step_no_motor_model(self, data: mjx.Data, action: jax.Array) -> mjx.Data:
+        return mjx_env.step(self.mjx_model, data, action, self.n_substeps)
+
     def step(self, state: mjx_env.State, action: jax.Array) -> mjx_env.State:
-        data = mjx_env.step(self.mjx_model, state.data, action, self.n_substeps)
+        """Step the environment with the given action."""
+
+        data = self._step_fn(state.data, action)
 
         obs = self._get_obs(data, state.info)
 
