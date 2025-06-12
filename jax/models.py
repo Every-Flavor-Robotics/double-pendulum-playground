@@ -73,7 +73,7 @@ class ActorCritic(nn.Module):
             critic
         )
 
-        return pi, jnp.squeeze(critic, axis=-1)
+        return pi, jnp.squeeze(critic, axis=-1), None
 
 
 class ActorCriticAssymetric(nn.Module):
@@ -118,6 +118,18 @@ class ActorCriticAssymetric(nn.Module):
         actor_logtstd = self.param("log_std", nn.initializers.zeros, (self.action_dim,))
         pi = distrax.MultivariateNormalDiag(actor_mean, jnp.exp(actor_logtstd))
 
+        state_pred = nn.Dense(
+            256, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
+        )(actor_mean)
+        state_pred = activation(state_pred)
+        state_pred = nn.Dense(
+            256, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
+        )(state_pred)
+        state_pred = activation(state_pred)
+        state_pred = nn.Dense(
+            obs_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0)
+        )(state_pred)
+
         critic = nn.Dense(
             256, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
         )(x_critic)
@@ -142,7 +154,7 @@ class ActorCriticAssymetric(nn.Module):
             critic
         )
 
-        return pi, jnp.squeeze(critic, axis=-1)
+        return pi, jnp.squeeze(critic, axis=-1), state_pred
 
 
 def save_model(params, obs_mean, obs_var, save_path):

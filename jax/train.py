@@ -28,7 +28,7 @@ config = {
     "LR": 3e-4,
     "NUM_ENVS": 4096,
     "NUM_STEPS": 10,
-    "TOTAL_TIMESTEPS": 10e8,
+    "TOTAL_TIMESTEPS": 1e8,
     "UPDATE_EPOCHS": 4,
     "NUM_MINIBATCHES": 32,
     "GAMMA": 0.99,
@@ -38,12 +38,12 @@ config = {
     "VF_COEF": 0.5,
     "MAX_GRAD_NORM": 0.5,
     "ACTIVATION": "tanh",
-    "TIME_OFFSET": True,
+    "TIME_OFFSET": False,
     "ENV_NAME": "hopper",
-    "ANNEAL_LR": True,
+    "ANNEAL_LR": False,
     "NORMALIZE_ENV": True,
     "USE_MOTOR_MODEL": True,
-    "PENDULUM_XML": "../new_pendulum.xml",
+    "PENDULUM_XML": "../xml/new_pendulum.xml",
     "LOGGING": True,
 }
 
@@ -60,6 +60,7 @@ def callback(info, loss_info):
     # Unpack loss info
     value_loss = loss_info["value_loss"]
     actor_loss = loss_info["actor_loss"]
+    state_pred_loss = loss_info["state_pred_loss"]
     entropy = loss_info["entropy"]
 
     # Only consider environments where episode ended during this step
@@ -82,6 +83,7 @@ def callback(info, loss_info):
         print(f"  Average length: {avg_length}")
         print(f"  Value loss: {value_loss}")
         print(f"  Actor loss: {actor_loss}")
+        print(f"  State prediction loss: {state_pred_loss}")
         print(f"  Entropy: {entropy}")
 
         # Log average episode return and length to wandb
@@ -92,6 +94,7 @@ def callback(info, loss_info):
                 "global_step": steps_elapsed * config["NUM_ENVS"] * config["NUM_STEPS"],
                 "train/value_loss": value_loss,
                 "train/actor_loss": actor_loss,
+                "train/state_pred_loss": state_pred_loss,
                 "train/entropy": entropy,
             }
         )
@@ -205,7 +208,7 @@ def make_train(config):
 
                 # SELECT ACTION
                 rng, _rng = jax.random.split(rng)
-                pi, value = network.apply(train_state.params, last_obs)
+                pi, value, _ = network.apply(train_state.params, last_obs)
                 action = pi.sample(seed=_rng)
                 log_prob = pi.log_prob(action)
 
@@ -226,7 +229,13 @@ def make_train(config):
                 ]
 
                 transition = Transition(
-                    done, action, value, reward, log_prob, last_obs, info_filtered
+                    done,
+                    action,
+                    value,
+                    reward,
+                    log_prob,
+                    last_obs,
+                    info_filtered,
                 )
 
                 runner_state = (train_state, env_state, obsv, rng)
@@ -280,7 +289,7 @@ def make_train(config):
 
                     def _loss_fn(params, traj_batch, gae, targets):
                         # RERUN NETWORK
-                        pi, value = network.apply(params, traj_batch.obs)
+                        pi, value, state_pred = network.apply(params, traj_batch.obs)
                         log_prob = pi.log_prob(traj_batch.action)
 
                         # CALCULATE VALUE LOSS
@@ -309,12 +318,27 @@ def make_train(config):
                         loss_actor = loss_actor.mean()
                         entropy = pi.entropy().mean()
 
+                        if config["TIME_OFFSET"]:
+                            obs_dim = traj_batch.obs.shape[-1] // 2
+                            next_state = traj_batch.obs[..., obs_dim + 1 :]
+
+                            # Calculate state prediction loss
+                            loss_state_pred = jnp.square(state_pred - next_state).mean()
+                        else:
+                            loss_state_pred = jnp.array(0.0)
+
                         total_loss = (
                             loss_actor
                             + config["VF_COEF"] * value_loss
                             - config["ENT_COEF"] * entropy
+                            + 0.1 * loss_state_pred
                         )
-                        return total_loss, (value_loss, loss_actor, entropy)
+                        return total_loss, (
+                            value_loss,
+                            loss_actor,
+                            loss_state_pred,
+                            entropy,
+                        )
 
                     grad_fn = jax.value_and_grad(_loss_fn, has_aux=True)
                     total_loss, grads = grad_fn(
@@ -358,13 +382,14 @@ def make_train(config):
             metric = traj_batch.info
             rng = update_state[-1]
 
-            total_loss, (value_loss, actor_loss, entropy) = loss_info
+            total_loss, (value_loss, actor_loss, state_pred_loss, entropy) = loss_info
 
             # Reduce losses to scalar, mean
             loss_info = {
                 "total_loss": total_loss.mean(),
                 "value_loss": value_loss.mean(),
                 "actor_loss": actor_loss.mean(),
+                "state_pred_loss": state_pred_loss.mean(),
                 "entropy": entropy.mean(),
             }
 
