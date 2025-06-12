@@ -34,37 +34,30 @@
              contype="0" and conaffinity="0" so it doesn't collide with anything.
         -->
 
-        <geom name="rail" pos="0 0 0" quat="0.707 0 0.707 0" rgba="0.3 0.3 0.7 1" size="0.015 0.5381625"
-            type="capsule"/>
+        <geom name="rail" pos="0 0 0" quat="0.707 0 0.707 0" rgba="0.3 0.3 0.7 1" size="0.02 1"
+            type="capsule" />
 
-        <!-- True range:  range="-0.5381625 0.5381625"-->
         <body name="cart" pos="0 0 0">
-            <joint axis="1 0 0" limited="true" margin="0.01" name="slider" pos="0 0 0" range="-0.5381625 0.5381625"
-                type="slide" damping="0.13" frictionloss="1"/>
-            <geom name="cart" pos="0 0 0" quat="0.707 0 0.707 0" size="0.05 0.0875" type="capsule" mass="0.6"/>
+            <joint axis="1 0 0" limited="true" margin="0.01" name="slider" pos="0 0 0" range="-1 1"
+                type="slide" />
+            <geom name="cart" pos="0 0 0" quat="0.707 0 0.707 0" size="0.1 0.1" type="capsule" />
 
             <body name="pole" pos="0 0 0">
-                <joint axis="0 1 0" name="hinge" pos="0 0 0" type="hinge" damping="0.008"/>
-                <geom fromto="0 0 0 0 0 0.492125" name="cpole" rgba="0 0.7 0.7 1" size="0.03 0.2460625"
-                    type="capsule" mass="0.085" />
-
-
-                <site name="pole_tip" pos="0 0 0.492125" size="0.01 0.01" rgba="1 0 0 1" />
-                <body name="pole2" pos="0 0 0.492125">
-                    <joint axis="0 1 0" name="hinge2" pos="0 0 0" type="hinge" damping="0.008"/>
-                    <geom fromto="0 0 0 0 0 0.492125" name="cpole2" rgba="0 0.7 0.7 1" size="0.03 0.2460625"
-                        type="capsule" mass="0.085"/>
-                    <!-- <inertial pos="0 0 0" mass="0.085"/> -->
-                    <!-- <inertial pos="0 0 0" mass="0.1"/> -->
-
-
-                    <site name="pole2_tip" pos="0 0 0.492125" size="0.01 0.01" />
+                <joint axis="0 1 0" name="hinge" pos="0 0 0" type="hinge" />
+                <geom fromto="0 0 0 0 0 0.6" name="cpole" rgba="0 0.7 0.7 1" size="0.045 0.3"
+                    type="capsule" />
+                <site name="pole_tip" pos="0 0 0.6" size="0.01 0.01" rgba="1 0 0 1" />
+                <body name="pole2" pos="0 0 0.6">
+                    <joint axis="0 1 0" name="hinge2" pos="0 0 0" type="hinge" />
+                    <geom fromto="0 0 0 0 0 0.6" name="cpole2" rgba="0 0.7 0.7 1" size="0.045 0.3"
+                        type="capsule" />
+                    <site name="pole2_tip" pos="0 0 0.6" size="0.01 0.01" />
                 </body>
             </body>
         </body>
     </worldbody>
 
     <actuator>
-        <motor ctrllimited="true" ctrlrange="-1 1" gear="10" joint="slider" name="slide" />
+        <motor ctrllimited="true" ctrlrange="-1 1" gear="500" joint="slider" name="slide" />
     </actuator>
 </mujoco>
