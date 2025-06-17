@@ -89,8 +89,42 @@ class ActorCriticAssymetric(nn.Module):
 
         obs_dim = x.shape[-1] // 2
 
-        x_policy = x[..., : obs_dim + 1]
-        x_critic = x[..., obs_dim + 1 :]
+        prev_obs = x[..., :obs_dim]
+        action = x[..., obs_dim : obs_dim + 1]
+        cur_obs = x[..., obs_dim + 1 :]
+
+        x_pred = jnp.concatenate([prev_obs, action], axis=-1)
+
+        state_pred = nn.Dense(
+            256, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
+        )(x_pred)
+        state_pred = activation(state_pred)
+        state_pred = nn.Dense(
+            256, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
+        )(state_pred)
+        state_pred = activation(state_pred)
+        state_pred = nn.Dense(
+            256, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
+        )(state_pred)
+        state_pred = activation(state_pred)
+        state_pred = nn.Dense(
+            256, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
+        )(state_pred)
+        state_pred = activation(state_pred)
+        state_pred = nn.Dense(
+            256, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
+        )(state_pred)
+        state_pred = activation(state_pred)
+        state_pred = nn.Dense(
+            obs_dim, kernel_init=orthogonal(1.0), bias_init=constant(0.0)
+        )(state_pred)
+
+        # Construct the prediction of the current observation
+        cur_obs_pred = state_pred + prev_obs
+
+        # Construct the input for the policy
+        # x_policy = lax.stop_gradient(cur_obs_pred)
+        x_policy = jnp.concatenate([prev_obs, action], axis=-1)
 
         actor_mean = nn.Dense(
             256, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
@@ -118,17 +152,8 @@ class ActorCriticAssymetric(nn.Module):
         actor_logtstd = self.param("log_std", nn.initializers.zeros, (self.action_dim,))
         pi = distrax.MultivariateNormalDiag(actor_mean, jnp.exp(actor_logtstd))
 
-        state_pred = nn.Dense(
-            256, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
-        )(actor_mean)
-        state_pred = activation(state_pred)
-        state_pred = nn.Dense(
-            256, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
-        )(state_pred)
-        state_pred = activation(state_pred)
-        state_pred = nn.Dense(
-            obs_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0)
-        )(state_pred)
+        # x_critic is just the current observation
+        x_critic = cur_obs
 
         critic = nn.Dense(
             256, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)

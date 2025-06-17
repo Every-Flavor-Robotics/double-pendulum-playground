@@ -28,7 +28,7 @@ config = {
     "LR": 3e-4,
     "NUM_ENVS": 4096,
     "NUM_STEPS": 10,
-    "TOTAL_TIMESTEPS": 1e8,
+    "TOTAL_TIMESTEPS": 1e9,
     "UPDATE_EPOCHS": 4,
     "NUM_MINIBATCHES": 32,
     "GAMMA": 0.99,
@@ -40,7 +40,7 @@ config = {
     "ACTIVATION": "tanh",
     "TIME_OFFSET": False,
     "ENV_NAME": "hopper",
-    "ANNEAL_LR": False,
+    "ANNEAL_LR": True,
     "NORMALIZE_ENV": True,
     "USE_MOTOR_MODEL": True,
     "PENDULUM_XML": "../xml/new_pendulum.xml",
@@ -247,7 +247,7 @@ def make_train(config):
 
             # CALCULATE ADVANTAGE
             train_state, env_state, last_obs, rng = runner_state
-            _, last_val = network.apply(train_state.params, last_obs)
+            _, last_val, _ = network.apply(train_state.params, last_obs)
 
             def _calculate_gae(traj_batch, last_val):
                 # Use both terminated and truncated
@@ -320,10 +320,15 @@ def make_train(config):
 
                         if config["TIME_OFFSET"]:
                             obs_dim = traj_batch.obs.shape[-1] // 2
+                            cur_state = traj_batch.obs[..., :obs_dim]
                             next_state = traj_batch.obs[..., obs_dim + 1 :]
 
+                            state_delta = next_state - cur_state
+
                             # Calculate state prediction loss
-                            loss_state_pred = jnp.square(state_pred - next_state).mean()
+                            loss_state_pred = jnp.square(
+                                state_pred - state_delta
+                            ).mean()
                         else:
                             loss_state_pred = jnp.array(0.0)
 
@@ -331,7 +336,7 @@ def make_train(config):
                             loss_actor
                             + config["VF_COEF"] * value_loss
                             - config["ENT_COEF"] * entropy
-                            + 0.1 * loss_state_pred
+                            + loss_state_pred
                         )
                         return total_loss, (
                             value_loss,

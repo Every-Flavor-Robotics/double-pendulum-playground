@@ -463,18 +463,24 @@ class InvertedDoublePendulumEnv(mjx_env.MjxEnv):
             # Step the environment by one substep
             return mjx_env.step(self.mjx_model, data, mujoco_action, 1)
 
+        state_prev = lax.fori_loop(0, self.n_substeps, body_fn, data)
+        # state = lax.fori_loop(0, 1, body_fn, state_prev)
+
         # Run the substep loop
-        return lax.fori_loop(0, self.n_substeps, body_fn, data)
+        return state_prev, state_prev
 
     def _step_no_motor_model(self, data: mjx.Data, action: jax.Array) -> mjx.Data:
-        return mjx_env.step(self.mjx_model, data, action, self.n_substeps)
+        # Step n_steps - 1
+        state_prev = mjx_env.step(self.mjx_model, data, action, self.n_substeps - 2)
+
+        return mjx_env.step(self.mjx_model, state_prev, action, 2), state_prev
 
     def step(self, state: mjx_env.State, action: jax.Array) -> mjx_env.State:
         """Step the environment with the given action."""
 
-        data = self._step_fn(state.data, action)
+        data, state_prev = self._step_fn(state.data, action)
 
-        obs = self._get_obs(data, state.info)
+        obs = self._get_obs(state_prev, state.info)
 
         def is_dead(target_mode, pole2_y):
             # Returns boolean for "dead" according to mode
